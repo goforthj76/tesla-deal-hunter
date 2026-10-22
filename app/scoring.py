@@ -53,6 +53,38 @@ def compute_market_averages(listings: list[dict]) -> dict[tuple[str, int], dict]
         }
     return results
 
+def check_hw4(listing: dict) -> tuple[bool, str]:
+    year = listing.get('year') or 0
+    model = str(listing.get('model') or '')
+    desc = (str(listing.get('description') or '') + ' ' + str(listing.get('trim') or '')).lower()
+    vin = str(listing.get('vin') or '').upper()
+
+    # 1. Any 2024+ Tesla is 100% HW4
+    if year >= 2024:
+        return True, "HW4 CONFIRMED (2024+)"
+
+    # 2. Explicit HW4 mentions in description, dealer notes, or options
+    if 'hw4' in desc or 'hardware 4' in desc or 'ap04' in desc:
+        return True, "HW4 CONFIRMED (Dealer/Spec)"
+
+    # 3. 2023 Model S & Model X (switched to HW4 in Jan/Feb 2023)
+    if year == 2023 and ('Model S' in model or 'Model X' in model):
+        return True, "HW4 INFERRED (2023 S/X)"
+
+    # 4. 2023 Model Y: Fremont cutover seq >= 780000, Austin cutover seq >= 120000
+    if year == 2023 and 'Model Y' in model and len(vin) == 17:
+        plant = vin[10]
+        try:
+            seq = int(vin[11:])
+            if plant == 'A' and seq >= 120000:
+                return True, "HW4 INFERRED (Late 2023 Austin)"
+            if plant == 'F' and seq >= 780000:
+                return True, "HW4 INFERRED (Late 2023 Fremont)"
+        except ValueError:
+            pass
+
+    return False, "HW3 LIKELY"
+
 def score_deal(listing: dict, market_averages: dict | None = None, settings: dict | None = None, price_history: list | None = None) -> dict:
     """
     Multi-factor 0-100 deal scoring engine.
@@ -227,11 +259,13 @@ def score_deal(listing: dict, market_averages: dict | None = None, settings: dic
             modifier += 5.0
             reasons.append(f"Price reduced by ${int(drop):,}")
 
-    hw4 = False
-    if year >= 2024:
-        hw4 = True
-        modifier += 5.0
-        reasons.append("HW4 Autopilot generation")
+    is_hw4_car, hw4_tag = check_hw4(listing)
+    if is_hw4_car:
+        modifier += 15.0
+        reasons.append(f"⚡ {hw4_tag}")
+    elif settings.get('require_hw4'):
+        modifier -= 30.0
+        risks.append("Pre-2024 / HW3 model (HW4 required)")
     
     adverse = bool(re.search(r'\b(salvage|rebuilt|lemon|buyback|flood|total loss|frame damage|junk)\b', desc))
     if adverse:
@@ -262,6 +296,7 @@ def score_deal(listing: dict, market_averages: dict | None = None, settings: dic
         'breakdown': breakdown,
         'reasons': reasons,
         'risks': risks,
-        'hw4': 'HW4 GENERATION INFERRED' if hw4 else 'HW3 LIKELY' if year <= 2023 and year > 0 else 'UNKNOWN',
+        'hw4': hw4_tag,
+        'is_hw4': is_hw4_car,
         'distance': dist
     }

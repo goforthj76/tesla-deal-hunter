@@ -117,6 +117,7 @@ def init_db():
             'Autotrader',
             'Cars.com',
             'Carvana',
+            'TrueCar',
             'Autohub Texas',
             'Autos of Dallas',
             'MarketCheck'

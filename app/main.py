@@ -21,11 +21,11 @@ from .database import (
     Activity, Setting, Hunt, MarketAverage, Notification, now
 )
 from .analysis import assess
-from .scoring import score_deal, compute_market_averages
+from .scoring import score_deal, compute_market_averages, check_hw4
 from .notifier import send_deal_alert, send_price_drop_alert, test_connection, is_configured
 from .collectors import (
     autohub, dallas, marketcheck, tesla_used, cars_com,
-    cargurus, carvana_search, scan_all_sources
+    cargurus, carvana_search, truecar_search, scan_all_sources
 )
 
 load_dotenv(ROOT / '.env')
@@ -39,11 +39,11 @@ class Preferences(BaseModel):
     latitude: float = Field(default=33.0246, ge=-90, le=90)
     longitude: float = Field(default=-97.0712, ge=-180, le=180)
     radius: int = Field(default=100, ge=1, le=500)
-    max_price: int = Field(default=32000, ge=1000, le=200000)
+    max_price: int = Field(default=33000, ge=1000, le=200000)
     ideal_max: int = Field(default=28000, ge=1000, le=200000)
     preferred_mileage: int = Field(default=60000, ge=0, le=300000)
     models: list[str] = Field(default=['Model 3', 'Model Y', 'Model S', 'Model X', 'Cybertruck'])
-    require_hw4: bool = False
+    require_hw4: bool = True
     dealer_interval_minutes: int = Field(default=30, ge=60, le=1440)
     api_interval_minutes: int = Field(default=10, ge=360, le=10080)
     monthly_api_budget: int = Field(default=450, ge=1, le=500)
@@ -126,18 +126,26 @@ def ingest(source: str, rows: list[dict], complete: bool):
             listing.status = 'ACTIVE'
             listing.deal_score = score_res['score']
 
+            is_hw4_car, hw4_tag = check_hw4(d)
+            price = d.get('price')
+            year = d.get('year') or 0
+            
+            # User constraint: ONLY notify if price <= $33,000 and (year >= 2024 or (year == 2023 and is_hw4_car))
+            hw4_qualified = (year >= 2024) or (year == 2023 and is_hw4_car)
+            price_qualified = price is not None and price <= 33000
+
             if d.get('price') is not None and old_price != d['price']:
                 s.add(Price(listing_id=key, vin=vin, amount=d['price'], observed=stamp))
                 if old_price is not None:
                     s.add(Activity(message=f"Price change {vin}: {old_price} → {d['price']}"))
-                    if old_price > d['price']:
+                    if old_price > d['price'] and hw4_qualified and price_qualified:
                         try:
                             loop = asyncio.get_running_loop()
                             loop.create_task(send_price_drop_alert(d, old_price, d['price']))
                         except RuntimeError:
                             pass
 
-            if score_res['score'] >= alert_threshold:
+            if hw4_qualified and price_qualified and score_res['score'] >= alert_threshold:
                 already_notified = s.scalar(
                     select(func.count(Notification.id)).where(Notification.vin == vin)
                 )
@@ -237,6 +245,8 @@ async def scan_source(name: str):
             rows, complete = await cargurus(pref, activity)
         elif name == 'Carvana':
             rows, complete = await carvana_search(pref, activity)
+        elif name == 'TrueCar':
+            rows, complete = await truecar_search(pref, activity)
         elif name == 'Autohub Texas':
             rows, complete = await autohub(activity)
         elif name == 'Autos of Dallas':
@@ -267,14 +277,17 @@ async def scan_source(name: str):
         with Session.begin() as s:
             src = s.get(Source, name)
             if src:
-                interval = 5 if name == 'Tesla.com' else 15 if name in ('Cars.com', 'CarGurus', 'Carvana') else 60
+                interval = 5 if name == 'Tesla.com' else 15 if name in ('Cars.com', 'CarGurus', 'Carvana', 'TrueCar') else 60
                 src.next_scan = time.time() + (interval * 60)
         scanning = None
 
 async def worker():
     while True:
         try:
-            sources_to_check = ['Tesla.com', 'Cars.com', 'CarGurus', 'Carvana', 'Autohub Texas', 'Autos of Dallas']
+            sources_to_check = [
+                'Tesla.com', 'Cars.com', 'CarGurus', 'Carvana', 'TrueCar',
+                'Autohub Texas', 'Autos of Dallas', 'MarketCheck'
+            ]
             for name in sources_to_check:
                 with Session() as s:
                     src = s.get(Source, name)
@@ -324,9 +337,15 @@ def get_state():
                 'summary': hunt.summary
             }
 
+        # Batch load listings in 1 query instead of 500+ separate queries
+        all_listings = list(s.scalars(select(Listing)))
+        listings_by_vin = {}
+        for l in all_listings:
+            listings_by_vin.setdefault(l.vin, []).append(l)
+
         raw_vehicles = []
         for v in s.scalars(select(Vehicle).order_by(Vehicle.deal_score.desc().nullslast())):
-            listings = list(s.scalars(select(Listing).where(Listing.vin == v.vin)))
+            listings = listings_by_vin.get(v.vin, [])
             active_listings = [l for l in listings if l.status == 'ACTIVE']
             best_listing = active_listings[0] if active_listings else (listings[0] if listings else None)
             
@@ -382,11 +401,54 @@ async def trigger_scan(source_name: str):
     asyncio.create_task(scan_source(source_name))
     return {'status': f'Scan triggered for {source_name}'}
 
+async def perform_scan_all():
+    pref = settings()
+    activity("Starting concurrent scan across all sources...")
+    mk_key = os.getenv('MARKETCHECK_API_KEY', '')
+    results = await scan_all_sources(pref, activity, marketcheck_key=mk_key)
+    for name, (rows, complete) in results.items():
+        if rows:
+            ingest(name, rows, complete)
+            scan_metrics[name] = {
+                'last_count': len(rows),
+                'complete': complete
+            }
+            activity(f"{name}: ingested {len(rows)} vehicles")
+
 @app.post('/api/scan-all')
 async def trigger_scan_all():
-    pref = settings()
-    asyncio.create_task(scan_all_sources(pref, activity))
+    asyncio.create_task(perform_scan_all())
     return {'status': 'Concurrent scan triggered across all sources'}
+
+class MarketCheckKeyUpdate(BaseModel):
+    api_key: str
+
+@app.post('/api/marketcheck-key')
+async def set_marketcheck_key(body: MarketCheckKeyUpdate):
+    global MARKETCHECK_ARCHIVE_ENABLED
+    key = body.api_key.strip()
+    os.environ['MARKETCHECK_API_KEY'] = key
+    MARKETCHECK_ARCHIVE_ENABLED = True
+    env_path = ROOT / '.env'
+    lines = []
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+    new_lines = [l for l in lines if not l.startswith('MARKETCHECK_API_KEY=')]
+    new_lines.append(f"MARKETCHECK_API_KEY={key}")
+    new_lines = [l for l in new_lines if not l.startswith('MARKETCHECK_RETENTION_AUTHORIZED=')]
+    new_lines.append("MARKETCHECK_RETENTION_AUTHORIZED=true")
+    env_path.write_text('\n'.join(new_lines) + '\n')
+    activity(f"MarketCheck API key updated ({key[:4]}...{key[-4:] if len(key)>8 else ''})")
+    asyncio.create_task(scan_source('MarketCheck'))
+    return {'status': 'Key saved and MarketCheck scan triggered'}
+
+@app.get('/api/marketcheck-key')
+def get_marketcheck_key():
+    key = os.getenv('MARKETCHECK_API_KEY', '')
+    return {
+        'configured': bool(key),
+        'masked': f"{key[:4]}...{key[-4:]}" if len(key) > 8 else ('set' if key else '')
+    }
 
 @app.post('/api/telegram/test')
 async def test_telegram_endpoint():

@@ -64,3 +64,24 @@ def test_market_averages_calculation():
     assert averages[('Model Y', 2023)]['avg_price'] == 31000.0
     assert averages[('Model Y', 2023)]['avg_mileage'] == 25000.0
     assert averages[('Model Y', 2023)]['sample_count'] == 2
+
+def test_hw4_notification_criteria():
+    from app.scoring import check_hw4
+    
+    # 2024 Model 3 -> HW4 confirmed
+    is_hw4, tag = check_hw4({'year': 2024, 'model': 'Model 3'})
+    assert is_hw4
+    assert 'HW4' in tag
+
+    # 2023 Model Y with Austin HW4 VIN -> HW4 inferred
+    is_hw4, tag = check_hw4({'year': 2023, 'model': 'Model Y', 'vin': '7SAYGDEE4PA195817'})
+    assert is_hw4
+
+    # 2023 Model 3 standard -> HW3 likely
+    is_hw4, tag = check_hw4({'year': 2023, 'model': 'Model 3', 'vin': '5YJ3E1EA9PF410698'})
+    assert not is_hw4
+
+    # 2023 Model 3 with explicit dealer HW4 mention -> HW4 confirmed
+    is_hw4, tag = check_hw4({'year': 2023, 'model': 'Model 3', 'description': 'Equipped with HW4 Autopilot hardware'})
+    assert is_hw4
+

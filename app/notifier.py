@@ -63,7 +63,13 @@ async def send_deal_alert(listing: dict, score_result: dict) -> bool:
     mile_str = f"{int(mileage):,} mi" if mileage else "Miles unknown"
     dist_str = f"{dist} mi away" if dist else "Distance unverified"
 
-    title = f"{year} Tesla {model} {trim}".strip()
+    clean_trim = str(trim).strip()
+    if clean_trim:
+        clean_trim = re.sub(rf'^(?:{year}\s+)?(?:Tesla\s+)?(?:{model}\s*)?', '', clean_trim, flags=re.I).strip()
+    title_parts = [str(year) if year else '', 'Tesla', str(model) if model else '']
+    if clean_trim:
+        title_parts.append(clean_trim)
+    title = ' '.join(p for p in title_parts if p).strip()
     reasons_text = "\n".join(f"• {escape_md(r)}" for r in score_result.get('reasons', []))
 
     text = (

@@ -56,12 +56,13 @@ function render() {
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', 'STARRED'];
+  const categories = ['ALL', '⚡ HW4 / 2024+', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;
       if (c === 'ALL') count = state.vehicles.length;
       else if (c === 'STARRED') count = state.vehicles.filter((v) => v.watched).length;
+      else if (c === '⚡ HW4 / 2024+') count = state.vehicles.filter((v) => (v.year && v.year >= 2024) || (v.hw4 && v.hw4.includes('HW4'))).length;
       else count = state.vehicles.filter((v) => v.category === c).length;
       return `<button class="filter-chip ${c === currentFilter ? 'selected' : ''}" data-cat="${c}">${c} (${count})</button>`;
     })
@@ -102,6 +103,9 @@ function renderVehicles() {
 
   let list = state.vehicles.filter((v) => {
     if (currentFilter === 'STARRED') return v.watched;
+    if (currentFilter === '⚡ HW4 / 2024+') {
+      return (v.year && v.year >= 2024) || (v.hw4 && v.hw4.includes('HW4'));
+    }
     if (currentFilter !== 'ALL' && v.category !== currentFilter) return false;
     if (!query) return true;
     const hay = [v.vin, v.model, v.trim, v.dealer, v.year, v.source].join(' ').toLowerCase();
@@ -245,6 +249,45 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // MarketCheck API key button
+  const btnSaveMk = $('btn-save-mk');
+  if (btnSaveMk) {
+    btnSaveMk.onclick = async () => {
+      const keyInput = $('pref-marketcheck-key');
+      const key = keyInput ? keyInput.value.trim() : '';
+      if (!key) return alert('Please enter a valid MarketCheck API key');
+      try {
+        btnSaveMk.textContent = 'Connecting...';
+        await api('/api/marketcheck-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: key })
+        });
+        alert('MarketCheck API Key saved! Live dealership scan started.');
+        $('mk-status-text').textContent = '✅ Connected! MarketCheck scan actively running in background.';
+        $('mk-status-text').style.color = '#3fb950';
+        btnSaveMk.textContent = 'Saved';
+        setTimeout(refresh, 2000);
+      } catch (e) {
+        alert('Failed to save MarketCheck key: ' + e.message);
+        btnSaveMk.textContent = 'Save Key';
+      }
+    };
+  }
+
+  // Load MarketCheck key status
+  api('/api/marketcheck-key').then((r) => {
+    if (r.configured) {
+      if ($('mk-status-text')) {
+        $('mk-status-text').textContent = `✅ Connected (${r.masked}). Live dealership scanning active.`;
+        $('mk-status-text').style.color = '#3fb950';
+      }
+      if ($('pref-marketcheck-key')) {
+        $('pref-marketcheck-key').placeholder = 'API Key Active (' + r.masked + ')';
+      }
+    }
+  }).catch(() => {});
+
   // Settings form
   $('settings-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -253,7 +296,7 @@ window.addEventListener('DOMContentLoaded', () => {
       radius: parseInt($('pref-radius').value, 10),
       max_price: parseInt($('pref-max-price').value, 10),
       ideal_max: parseInt($('pref-ideal-price').value, 10),
-      telegram_alert_threshold: parseInt($('pref-tg-threshold').value, 10),
+      telegram_alert_threshold: parseInt($('pref-tg-threshold')?.value || '70', 10),
     };
     try {
       await api('/api/settings', {

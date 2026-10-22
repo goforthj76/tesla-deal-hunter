@@ -320,58 +320,72 @@ async def cargurus(settings: dict, emit) -> tuple[list[dict], bool]:
 # -------------------------------------------------------------
 async def carvana_search(settings: dict, emit) -> tuple[list[dict], bool]:
     zip_code = str(settings.get('zip_code', '75022'))
-    max_price = int(settings.get('max_price', 32000))
     rows = []
+    seen_vins = set()
 
-    url = "https://www.carvana.com/search-api/vehicles"
-    payload = {
-        "makes": [{"name": "Tesla"}],
-        "zip5": zip_code,
-        "maxPrice": max_price,
-        "page": 1,
-        "pageSize": 50,
-        "sortBy": "LowestPrice"
-    }
+    emit("Carvana: querying catalog...")
+    
+    def fetch_page(page_num: int):
+        url = f"https://www.carvana.com/cars/tesla?email=&zip={zip_code}&page={page_num}"
+        if cffi_requests:
+            return cffi_requests.get(url, impersonate="chrome120", timeout=15).text
+        headers = {'User-Agent': AGENT, 'Accept-Language': 'en-US,en;q=0.9'}
+        with httpx.Client(timeout=15, headers=headers) as c:
+            return c.get(url).text
 
-    headers = {
-        'User-Agent': AGENT,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-    }
-
+    loop = asyncio.get_event_loop()
     try:
-        emit("Carvana: querying catalog...")
-        async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                for v in data.get('vehicles', []):
-                    vin = v.get('vin')
-                    if not vin:
-                        continue
-                    try:
-                        vin = normalize_vin(vin)
-                    except Exception:
-                        pass
-                    
-                    rows.append({
-                        'vin': vin,
-                        'year': v.get('year'),
-                        'model': v.get('model', 'Tesla'),
-                        'trim': v.get('trim', ''),
-                        'drivetrain': 'AWD' if 'AWD' in str(v.get('trim', '')).upper() else 'RWD',
-                        'price': number(v.get('price')),
-                        'mileage': number(v.get('mileage')),
-                        'dealer': 'Carvana (Direct)',
-                        'address': 'Direct delivery to Flower Mound/Plano TX',
-                        'latitude': None,
-                        'longitude': None,
-                        'description': f"Carvana 7-day money-back guarantee. Shipping: {v.get('shippingFee', 'Free')}",
-                        'url': f"https://www.carvana.com/vehicle/{v.get('vehicleId')}",
-                        'image': v.get('photoUrl'),
-                        'availability': 'Available for Online Purchase',
-                        'source': 'Carvana'
-                    })
+        for p in range(1, 5):
+            html = await loop.run_in_executor(None, fetch_page, p)
+            soup = BeautifulSoup(html, 'html.parser')
+            scripts = soup.find_all('script', type='application/ld+json')
+            page_found = 0
+            for s in scripts:
+                try:
+                    d = json.loads(s.string)
+                    if d.get('@type') == 'Vehicle':
+                        vin = d.get('vehicleIdentificationNumber')
+                        if not vin or vin in seen_vins:
+                            continue
+                        try:
+                            vin = normalize_vin(vin)
+                        except Exception:
+                            pass
+                        
+                        price = number(d.get('offers', {}).get('price'))
+                        miles = number(d.get('mileageFromOdometer'))
+                        year = d.get('modelDate')
+                        model = d.get('model') or 'Tesla'
+                        trim = d.get('name', '').replace(f"{year} Tesla {model}", '').strip()
+                        vdp = d.get('offers', {}).get('url') or f"https://www.carvana.com/vehicle/{d.get('sku', '')}"
+                        img = d.get('image')
+
+                        seen_vins.add(vin)
+                        page_found += 1
+                        rows.append({
+                            'vin': vin,
+                            'year': year,
+                            'model': model,
+                            'trim': trim,
+                            'drivetrain': 'AWD' if 'AWD' in trim.upper() else 'RWD',
+                            'price': price,
+                            'mileage': miles,
+                            'dealer': 'Carvana (Direct)',
+                            'address': 'Direct delivery to Flower Mound/Plano TX',
+                            'latitude': None,
+                            'longitude': None,
+                            'description': d.get('description', 'Carvana 7-day money-back guarantee, 100-day warranty'),
+                            'url': vdp,
+                            'image': img,
+                            'availability': 'Available for Online Purchase',
+                            'source': 'Carvana'
+                        })
+                except Exception:
+                    continue
+            if page_found == 0:
+                break
+            await asyncio.sleep(0.2)
+        
         emit(f"Carvana: {len(rows)} vehicles found")
         return rows, True
     except Exception as e:
@@ -499,64 +513,241 @@ async def dallas(emit) -> tuple[list[dict], bool]:
             return [], False
 
 # -------------------------------------------------------------
-# 7. MARKETCHECK (Full Pagination Implementation)
+# 7. TRUECAR (DFW Local & Regional Dealer Listings)
 # -------------------------------------------------------------
-async def marketcheck(api_key, pref, emit, reserve_call):
-    if not api_key:
-        return [], False
-    endpoint = 'https://marketcheck-prod.apigee.net/v2/search/car/active'
+async def truecar_search(settings: dict, emit) -> tuple[list[dict], bool]:
+    zip_code = str(settings.get('zip_code', '75022'))
     rows = []
+    seen_vins = set()
+
+    emit("TrueCar: searching DFW listings...")
+    
+    def fetch_page(page_num: int):
+        url = f"https://www.truecar.com/used-cars-for-sale/listings/tesla/location-flower-mound-tx/?page={page_num}"
+        if cffi_requests:
+            return cffi_requests.get(url, impersonate="chrome120", timeout=15).text
+        headers = {'User-Agent': AGENT, 'Accept-Language': 'en-US,en;q=0.9'}
+        with httpx.Client(timeout=15, headers=headers) as c:
+            return c.get(url).text
+
+    loop = asyncio.get_event_loop()
+    try:
+        for p in range(1, 4):
+            html = await loop.run_in_executor(None, fetch_page, p)
+            soup = BeautifulSoup(html, 'html.parser')
+            cards = soup.find_all('div', attrs={'data-test': 'vehicleListingCard'})
+            page_found = 0
+            for c in cards:
+                link = c.find('a', href=re.compile(r'/used-cars-for-sale/listing/([A-HJ-NPR-Z0-9]{17})'))
+                if not link:
+                    continue
+                m = re.search(r'/used-cars-for-sale/listing/([A-HJ-NPR-Z0-9]{17})/([^/?]+)', link.get('href'))
+                if not m:
+                    continue
+                vin_raw, slug = m.group(1), m.group(2)
+                try:
+                    vin = normalize_vin(vin_raw)
+                except Exception:
+                    vin = vin_raw
+                if vin in seen_vins:
+                    continue
+
+                card_strings = list(c.stripped_strings)
+                card_text = ' // '.join(card_strings)
+                
+                ym = re.search(r'(20\d\d)', slug)
+                year = int(ym.group(1)) if ym else None
+                
+                model = 'Tesla'
+                if 'model-3' in slug.lower(): model = 'Model 3'
+                elif 'model-y' in slug.lower(): model = 'Model Y'
+                elif 'model-s' in slug.lower(): model = 'Model S'
+                elif 'model-x' in slug.lower(): model = 'Model X'
+                
+                # Clean trim from card
+                trim = ''
+                trim_m = re.search(r'Tesla\s+Model\s+[3YSX]\s*//\s*([^/]+?)\s*//\s*Used', card_text)
+                if trim_m:
+                    trim = trim_m.group(1).strip()
+                
+                # Precise Price inside THIS card only
+                price = None
+                price_el = c.find(attrs={'data-test': re.compile(r'vehicleCardPricing|vehiclePricing', re.I)})
+                if price_el:
+                    pm = re.search(r'\$([0-9]{1,3}(?:,[0-9]{3})+)', price_el.text)
+                    if pm:
+                        price = int(pm.group(1).replace(',', ''))
+                if not price:
+                    pm = re.search(r'Advertised price\s*//\s*\$([0-9]{1,3}(?:,[0-9]{3})+)', card_text)
+                    if pm:
+                        price = int(pm.group(1).replace(',', ''))
+
+                # Precise Mileage inside THIS card only
+                miles = None
+                mm = re.search(r'([0-9]{1,3}(?:,[0-9]{3})+)\s*mi\b', card_text)
+                if mm:
+                    miles = int(mm.group(1).replace(',', ''))
+
+                # Dealer name & distance from card
+                dealer = 'TrueCar Certified Dealer'
+                for s in card_strings:
+                    if re.search(r'(CarMax|AutoNation|Classic|Motors|Toyota|Honda|Ford|Chevrolet|Audi|BMW|Hyundai|Nissan|Subaru|VW|Kia|Lexus|Grapevine|Plano|Frisco|Carrollton|Dallas|Fort Worth|Lewisville)', s, re.I):
+                        dealer = s.strip()
+                        break
+                
+                dist = None
+                dm = re.search(r'(\d+(?:\.\d+)?)\s*mi away', card_text)
+                if dm:
+                    dist = float(dm.group(1))
+
+                img_el = c.find('img')
+                img_url = img_el.get('src') if img_el else None
+
+                seen_vins.add(vin)
+                page_found += 1
+                rows.append({
+                    'vin': vin,
+                    'year': year,
+                    'model': model,
+                    'trim': trim,
+                    'drivetrain': 'AWD' if 'awd' in trim.lower() or 'dual' in trim.lower() else 'RWD',
+                    'price': price,
+                    'mileage': miles,
+                    'dealer': dealer,
+                    'distance': dist,
+                    'address': 'DFW Area',
+                    'latitude': None,
+                    'longitude': None,
+                    'description': f"TrueCar verified listing. {dealer}",
+                    'url': f"https://www.truecar.com/used-cars-for-sale/listing/{vin}/{slug}/",
+                    'image': img_url,
+                    'availability': 'Active Listing',
+                    'source': 'TrueCar'
+                })
+            if page_found == 0:
+                break
+            await asyncio.sleep(0.2)
+        emit(f"TrueCar: {len(rows)} verified listings extracted")
+        return rows, True
+    except Exception as e:
+        emit(f"TrueCar note: {e}")
+        return rows, False
+
+# -------------------------------------------------------------
+# 8. MARKETCHECK (Dealership Aggregator API)
+# -------------------------------------------------------------
+async def marketcheck(api_key: str, pref: dict, emit, reserve_call=None) -> tuple[list[dict], bool]:
+    if not api_key:
+        emit("MarketCheck: no API key provided")
+        return [], False
+    
+    endpoint = 'https://api.marketcheck.com/v2/search/car/active'
+    zip_code = str(pref.get('zip_code', '75022'))
+    radius = int(pref.get('radius', 100))
+    max_price = int(pref.get('max_price', 35000))
+    rows = []
+    
+    emit(f"MarketCheck: querying live dealer network for zip {zip_code}...")
     async with httpx.AsyncClient(timeout=25) as client:
         for start in range(0, 350, 50):
+            if reserve_call:
+                try:
+                    reserve_call()
+                except Exception:
+                    break
+            params = {
+                'api_key': api_key,
+                'make': 'Tesla',
+                'zip': zip_code,
+                'radius': radius,
+                'car_type': 'used',
+                'price_range': f"15000-{max_price + 5000}",
+                'sort_by': 'price',
+                'sort_order': 'asc',
+                'rows': 50,
+                'start': start
+            }
             try:
-                reserve_call()
-            except Exception:
-                return rows, False
-            response = await client.get(endpoint, params={'api_key': api_key, 'start': start, 'rows': 50})
-            if response.status_code != 200:
-                return rows, False
-            payload = response.json()
-            valid_page = True
-            for v in payload.get('listings', []):
+                resp = await client.get(endpoint, params=params)
+                if resp.status_code != 200:
+                    emit(f"MarketCheck status: {resp.status_code}")
+                    break
+                payload = resp.json()
+            except Exception as e:
+                emit(f"MarketCheck request error: {e}")
+                break
+            
+            listings = payload.get('listings', [])
+            if not listings:
+                break
+            
+            for v in listings:
                 b = v.get('build', {})
                 dealer = v.get('dealer', {})
+                vin_raw = v.get('vin')
+                if not vin_raw:
+                    continue
                 try:
-                    vin = normalize_vin(v.get('vin'))
+                    vin = normalize_vin(vin_raw)
                 except Exception:
-                    valid_page = False
-                    continue
+                    vin = vin_raw
+                
                 url = v.get('vdp_url', '')
-                if urlparse(url).scheme not in ['https', 'http']:
-                    continue
-                rows.append(dict(
-                    vin=vin, year=b.get('year'), model=b.get('model'), trim=b.get('trim', ''),
-                    drivetrain=b.get('drivetrain'), price=number(v.get('price')),
-                    mileage=number(v.get('miles')), dealer=dealer.get('name'),
-                    latitude=number(dealer.get('latitude')),
-                    longitude=float(dealer['longitude']) if dealer.get('longitude') else None,
-                    url=url, source='MarketCheck', description='', image=None,
-                    availability='API active listing; dealer availability unverified'
-                ))
+                if not url or urlparse(url).scheme not in ['https', 'http']:
+                    url = f"https://www.marketcheck.com/vdp/{v.get('id')}"
+                
+                photos = v.get('media', {}).get('photo_links', [])
+                img = photos[0] if photos else None
+                
+                dealer_name = dealer.get('name') or 'Dealership'
+                city = dealer.get('city', '')
+                state = dealer.get('state', '')
+                address = f"{city}, {state}".strip(", ")
+                
+                rows.append({
+                    'vin': vin,
+                    'year': b.get('year'),
+                    'model': b.get('model', 'Tesla'),
+                    'trim': b.get('trim', '') or b.get('version', ''),
+                    'drivetrain': b.get('drivetrain', 'RWD'),
+                    'price': number(v.get('price')),
+                    'mileage': number(v.get('miles')),
+                    'dealer': dealer_name,
+                    'distance': number(v.get('dist')),
+                    'address': address,
+                    'latitude': number(dealer.get('latitude')),
+                    'longitude': float(dealer['longitude']) if dealer.get('longitude') else None,
+                    'url': url,
+                    'source': 'MarketCheck',
+                    'description': v.get('heading', 'Dealer Inventory'),
+                    'image': img,
+                    'availability': 'Active Dealership Listing'
+                })
+            
             if start + 50 >= payload.get('num_found', 0):
                 return rows, True
-            if not payload.get('listings'):
-                return rows, False
             await asyncio.sleep(0.1)
-    return rows, False
+
+    emit(f"MarketCheck: {len(rows)} dealer listings extracted")
+    return rows, True
 
 # -------------------------------------------------------------
 # MASTER CONCURRENT SCANNER
 # -------------------------------------------------------------
-async def scan_all_sources(settings: dict, emit) -> dict[str, tuple[list[dict], bool]]:
+async def scan_all_sources(settings: dict, emit, marketcheck_key: str = '') -> dict[str, tuple[list[dict], bool]]:
     results = {}
     tasks = {
         'Tesla.com': tesla_used(settings, emit),
         'Cars.com': cars_com(settings, emit),
         'CarGurus': cargurus(settings, emit),
         'Carvana': carvana_search(settings, emit),
+        'TrueCar': truecar_search(settings, emit),
         'Autohub Texas': autohub(emit),
         'Autos of Dallas': dallas(emit),
     }
+
+    if marketcheck_key:
+        tasks['MarketCheck'] = marketcheck(marketcheck_key, settings, emit)
 
     task_keys = list(tasks.keys())
     outcomes = await asyncio.gather(*tasks.values(), return_exceptions=True)

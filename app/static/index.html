@@ -94,9 +94,12 @@
           <input type="number" id="pref-ideal-price" value="28000">
         </div>
         <div class="form-group">
-          <label>Telegram Alert Score Threshold (0-100)</label>
-          <input type="number" id="pref-tg-threshold" value="70">
-          <small>Only listings scoring this number or higher will buzz your phone.</small>
+          <label>MarketCheck API Key (Dealership Network)</label>
+          <div style="display:flex; gap:8px;">
+            <input type="password" id="pref-marketcheck-key" placeholder="Paste your MarketCheck API key..." style="flex:1">
+            <button type="button" id="btn-save-mk" class="action-btn" style="padding:6px 12px; font-size:0.85rem;">Save Key</button>
+          </div>
+          <small id="mk-status-text" style="color:var(--muted)">Connects 50,000+ car dealerships across Texas & US for comprehensive used Tesla pricing.</small>
         </div>
         <button type="submit" class="primary-btn">Save Settings</button>
       </form>
