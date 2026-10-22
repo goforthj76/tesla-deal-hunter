@@ -36,10 +36,10 @@ async def test_connection() -> dict:
             resp = await client.post(url, json=payload)
             if resp.status_code == 200:
                 return {'success': True}
-            return {'success': False, 'error': f"Telegram API error {resp.status_code}: {resp.text}"}
+            return {'success': False, 'error': f"Telegram API error {resp.status_code}: response rejected"}
     except Exception as e:
-        log.error(f"Telegram connection test failed: {e}")
-        return {'success': False, 'error': str(e)}
+        log.error("Telegram request failed")
+        return {'success': False, 'error': type(e).__name__}
 
 async def send_deal_alert(listing: dict, score_result: dict) -> bool:
     token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
@@ -101,10 +101,10 @@ async def send_deal_alert(listing: dict, score_result: dict) -> bool:
                 log.info(f"Telegram alert sent for VIN {listing.get('vin')}")
                 return True
             else:
-                log.warning(f"Telegram failed ({resp.status_code}): {resp.text}")
+                log.warning(f"Telegram failed ({resp.status_code}): response rejected")
                 return False
     except Exception as e:
-        log.error(f"Error sending Telegram alert: {e}")
+        log.error("Telegram request failed")
         return False
 
 async def send_price_drop_alert(listing: dict, old_price: float, new_price: float) -> bool:
@@ -143,5 +143,5 @@ async def send_price_drop_alert(listing: dict, old_price: float, new_price: floa
             resp = await client.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload)
             return resp.status_code == 200
     except Exception as e:
-        log.error(f"Error sending price drop alert: {e}")
+        log.error("Telegram request failed")
         return False

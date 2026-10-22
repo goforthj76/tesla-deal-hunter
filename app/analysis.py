@@ -45,12 +45,31 @@ def assess(d, settings):
     if price is None: risks.append('Price missing')
     if miles is None: risks.append('Mileage missing')
     if miles is not None and miles > settings['preferred_mileage']: risks.append('Mileage above preference')
-    # A transparent preference score, explicitly NOT a comparable-market deal score.
-    score = (30 if price is not None and price <= settings['ideal_max'] else 15 if price is not None and price <= settings['max_price'] else 0)
-    score += 20 if miles is not None and miles < 40000 else 10 if miles is not None and miles < 50000 else 0
-    score += 15 if d.get('model') == 'Model Y' else 5
-    score += 15 if 'long range' in d.get('trim','').lower() else 0
-    score += 10 if d.get('drivetrain') == 'AWD' else 0
-    score += 10 if year >= 2024 else 0
+    # User preference weights, not a market valuation or assurance of condition.
+    from datetime import datetime, timezone
+    current_year = datetime.now(timezone.utc).year
+    parts = {
+        'Model year (35)': round(max(0, 35 - max(0,current_year-year)*10),1) if year else 0,
+        'Low mileage (35)': round(max(0,35*(1-miles/max(settings['preferred_mileage'],1))),1) if miles is not None else 0,
+        'Budget fit (10)': round(max(0,min(10,10*(settings['max_price']-price)/max(settings['max_price']-settings['ideal_max'],1))),1) if price is not None else 0,
+        'Long Range (10)': 10 if 'long range' in (d.get('trim') or '').lower() else 0,
+        'AWD (5)': 5 if (d.get('drivetrain') or '').upper()=='AWD' else 0,
+        'Model Y preference (5)': 5 if d.get('model')=='Model Y' else 0,
+    }
+    score = round(sum(parts.values()),1)
+    try:
+        normalize_vin(d.get('vin'))
+        vin_status='VALID FORMAT + CHECKSUM'
+    except ValueError:
+        vin_status='INVALID VIN'
+        risks.append('VIN is invalid; obtain the correct VIN before proceeding')
+    review = concern or dist is None or price is None or miles is None or vin_status=='INVALID VIN' or (settings['require_hw4'] and hw in ['HW3 LIKELY','UNKNOWN'])
     fsd = 'SELLER CLAIM: PAID FSD' if re.search(r'(full self driving|fsd)\s+(paid|included)',text) else 'SUBSCRIPTION MENTIONED' if re.search(r'fsd.{0,35}(monthly|month|subscription)',text) else 'UNKNOWN'
-    return {'category':'REJECTED' if reasons else 'MANUAL REVIEW' if concern or dist is None else 'WATCH','preference_score':score,'hw4':hw,'fsd':fsd,'distance':round(dist,1) if dist is not None else None,'reasons':reasons,'risks':risks,'market_value':None,'battery_health':None,'history':'UNKNOWN','fsd_credit':0,'fsd_subscription_comparison':settings['fsd_monthly']*settings['ownership_months']}
+    return {'category':'REJECTED' if reasons else 'MANUAL REVIEW' if review else 'WATCH','preference_score':score,'score_breakdown':parts,'vin_status':vin_status,'vin_decode_status':'NOT DECODED — checksum validation only','hw4':hw,'fsd':fsd,'distance':round(dist,1) if dist is not None else None,'reasons':reasons,'risks':risks,'market_value':None,'battery_health':None,'history':'UNKNOWN','fsd_credit':0,'fsd_subscription_comparison':settings['fsd_monthly']*settings['ownership_months']}
+
+
+def ranking_key(vehicle):
+    """Known unsuitable/unavailable records never outrank active candidates."""
+    status=vehicle.get('status','ACTIVE')
+    tier=4 if status!='ACTIVE' else 3 if vehicle.get('historical_only') else {'WATCH':0,'MANUAL REVIEW':1,'REJECTED':2}.get(vehicle.get('category'),1)
+    return (tier,-vehicle.get('preference_score',0),-(vehicle.get('year') or 0),vehicle.get('mileage') if vehicle.get('mileage') is not None else float('inf'),vehicle.get('vin',''))

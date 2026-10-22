@@ -36,7 +36,7 @@ def test_gates_and_uncertainty():
     assert assess(record(),p)['category']=='WATCH'
     assert assess(record(36001),p)['category']=='REJECTED'
     d=record();d['year']=2022
-    assert assess(d,p)['category']=='WATCH'
+    assert assess(d,p)['category']=='MANUAL REVIEW'
     d=record();d['latitude']=35
     assert assess(d,p)['category']=='REJECTED'
     d=record();d['description']='rebuilt title'
@@ -120,3 +120,78 @@ def test_hunt_counts_persist(database):
     main.ingest('test',[record()],True)
     summary=main.finish_hunt()
     assert summary=={'observations':1,'unique_vins':1,'scans':1}
+
+
+def test_newer_low_mileage_scores_higher():
+    p=main.Preferences().model_dump();old=record();old.update(year=2024,mileage=45000)
+    new=record();new.update(year=2025,mileage=10000)
+    assert assess(new,p)['preference_score']>assess(old,p)['preference_score']
+    result=assess(new,p)
+    assert result['preference_score']==sum(result['score_breakdown'].values())
+    assert result['vin_status']=='VALID FORMAT + CHECKSUM'
+
+def test_bad_vin_needs_review():
+    d=record();d['vin']='INVALID'
+    assert assess(d,main.Preferences().model_dump())['category']=='MANUAL REVIEW'
+
+def test_candidates_before_rejected_and_archived():
+    from app.analysis import ranking_key
+    base={'status':'ACTIVE','category':'WATCH','preference_score':10}
+    rejected={**base,'category':'REJECTED','preference_score':100}
+    historical={**base,'historical_only':True,'preference_score':100}
+    assert ranking_key(base)<ranking_key(rejected)<ranking_key(historical)
+
+def test_fsd_claim_does_not_raise_score():
+    a=record();b=record();b['description']='FSD included'
+    p=main.Preferences().model_dump()
+    assert assess(a,p)['preference_score']==assess(b,p)['preference_score']
+
+
+def test_tavily_dedupe_budget_and_cooldown(database,monkeypatch):
+    monkeypatch.setenv('TAVILY_API_KEY','fixture-secret')
+    class Response:
+        status_code=200
+        def json(self):return {'results':[{'url':'https://example.com/car?utm_source=ad','title':'Tesla','content':'Unverified'},{'url':'https://example.com/car','title':'Tesla','content':'Unverified'}]}
+    calls=[]
+    def post(url,**kwargs):
+        calls.append(kwargs)
+        assert kwargs['json']['search_depth']=='basic'
+        assert kwargs['json']['auto_parameters'] is False
+        return Response()
+    monkeypatch.setattr(main.httpx,'post',post)
+    assert main.discover()['new_urls']==1
+    d=main.discovery_state()
+    assert len(d['leads'])==1 and d['reserved_calls']==1
+    assert 'fixture-secret' not in json.dumps(d)
+    assert main.discover()['status']=='cooldown' and len(calls)==1
+    d.update(next_scan=0,reserved_calls=300);main.save_discovery(d)
+    assert main.discover()['status']=='local monthly cap reached'
+    assert len(calls)==1
+
+def test_discovery_url_rejects_unsafe_schemes():
+    assert main.canonical_discovery_url('javascript:alert(1)') is None
+    assert main.canonical_discovery_url('https://user:pass@example.com') is None
+    assert main.canonical_discovery_url('https://example.com/car?id=3&utm_medium=test#top')=='https://example.com/car?id=3'
+
+
+def test_legacy_activity_migration(tmp_path,monkeypatch):
+    from app import database as db
+    engine=create_engine('sqlite:///'+str(tmp_path/'legacy.db'))
+    with engine.begin() as c:
+        c.exec_driver_sql('CREATE TABLE activity (id INTEGER PRIMARY KEY, created TEXT, message TEXT)')
+        c.exec_driver_sql("INSERT INTO activity VALUES (1, '2026-10-22', 'preserved')")
+    monkeypatch.setattr(db,'engine',engine)
+    db.migrate_legacy_database();db.migrate_legacy_database()
+    with engine.connect() as c:
+        assert c.exec_driver_sql('SELECT at, message FROM activity').first()==('2026-10-22','preserved')
+
+def test_unified_endpoints_without_network(database,monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.database import Setting
+    monkeypatch.setattr(main,'settings',lambda:main.Preferences().model_dump())
+    client=TestClient(main.app)
+    assert client.get('/').status_code==200
+    assert client.get('/api/state').status_code==200
+    seeds=client.get('/api/research-seeds').json()
+    assert len(seeds)==17 and all(x['status']=='UNVERIFIED RESEARCH REFERENCE' for x in seeds)
+    assert 'TAVILY_API_KEY' not in client.get('/api/discovery').text
