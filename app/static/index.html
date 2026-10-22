@@ -1,13 +1,117 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Tesla Deal Hunter</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
-<body><header><a class="brand" href="/">TD<span>H</span> <small>TESLA DEAL HUNTER</small></a><span class="pill" id="status">Connecting</span></header>
-<main><div class="eyebrow">YOUR NEXT TESLA, WITH THE EVIDENCE.</div><h1>Find the deal.<br><span>Know the tradeoffs.</span></h1><p class="intro" id="summary">Flower Mound · 50-mile search · $36,000 maximum</p>
-<div class="notice" id="notice">Connecting to your local scanner…</div><section class="stats" id="stats"></section><section class="panel"><h2>Overnight hunt report</h2><p id="hunt-status">No report started.</p><p>Measures new activity from now. Source schedules and limits stay in effect; keep your PC awake.</p><button id="hunt-start">Start report</button> <button id="hunt-finish">Finish report</button></section>
-<nav aria-label="Dashboard sections"><button data-view="inventory" class="selected">Inventory</button><button data-view="sources">Source health</button><button data-view="activity">Live activity</button><button data-view="research">Search the web</button><button data-view="settings">Preferences</button></nav>
-<section id="inventory" class="view"><div class="section-head"><h2>Your shortlist</h2><span id="count"></span></div><div class="filters" id="filters"></div><div class="fields"><label>Find a dealer, trim or VIN<input id="search" type="search" placeholder="Search collected cars"></label><label>Sort<select id="sort"><option value="match">Preference match</option><option value="price">Lowest price</option><option value="mileage">Lowest mileage</option><option value="newest">Newest observed</option></select></label></div><div id="cars" class="cars"></div></section>
-<section id="sources" class="view" hidden><h2>Know your coverage</h2><p>Only sources shown as healthy are monitored. A website appearing in web search does not mean the app scans it.</p><div id="source-list"></div></section>
-<section id="activity" class="view" hidden><h2>Scanner activity</h2><p>Live updates every five seconds. Counts reflect real observations, including repeat scans.</p><div id="events"></div></section>
-<section id="research" class="view" hidden><h2>Search beyond one source</h2><p>These links open broad research searches. They are not automated collectors. Check the actual dealer page, current availability, VIN and history before considering a purchase.</p><div id="research-links" class="cards"></div></section>
-<section id="settings" class="view" hidden><h2>Your search preferences</h2><p>Coordinates default to approximate Flower Mound center. Radius is straight-line distance where dealer coordinates exist. Missing coordinates require manual review.</p><form id="settings-form"><div id="fields" class="fields"></div><label><input id="require_hw4" type="checkbox"> Require HW4</label><button type="submit" class="primary">Save preferences</button><p id="saved" role="status"></p></form></section>
-<footer>Evidence before excitement. No fabricated battery health, auction checks, or deal scores.<br>Local milestone · Keep your PC awake for scheduled scans.</footer></main>
-<dialog id="detail"><button id="close-detail" aria-label="Close vehicle details">Close ×</button><div id="detail-content"></div></dialog></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+  <title>Tesla Deal Hunter — 75022</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a class="brand" href="/">
+        <span class="logo-badge">⚡</span>
+        <div>
+          <strong>TESLA DEAL HUNTER</strong>
+          <small id="summary-sub">Zip 75022 · 100mi · Max $32K</small>
+        </div>
+      </a>
+      <div class="header-actions">
+        <span class="pill" id="status">Connecting...</span>
+        <button id="btn-scan-now" class="action-btn">⚡ Scan All Now</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Live Telegram Alert Status Banner -->
+    <div id="tg-banner" class="banner tg-banner">
+      <span id="tg-status-text">📱 Telegram notifications: Checking...</span>
+      <button id="tg-test-btn" class="sm-btn">Send Test Alert</button>
+    </div>
+
+    <!-- Quick Stat Tiles -->
+    <section class="stats-grid" id="stats"></section>
+
+    <!-- Navigation Views -->
+    <nav class="nav-tabs" aria-label="Dashboard sections">
+      <button data-view="inventory" class="tab-btn selected">🚗 Best Deals</button>
+      <button data-view="sources" class="tab-btn">📡 Sources & Scanners</button>
+      <button data-view="activity" class="tab-btn">⚡ Live Activity</button>
+      <button data-view="settings" class="tab-btn">⚙️ Settings</button>
+    </nav>
+
+    <!-- INVENTORY VIEW -->
+    <section id="inventory" class="view-panel active">
+      <div class="toolbar">
+        <div class="filters-row" id="filters"></div>
+        <div class="search-sort-row">
+          <input type="text" id="search" placeholder="🔍 Search Model, Trim, VIN, Dealer..." autocomplete="off">
+          <select id="sort">
+            <option value="score">🔥 Highest Deal Score</option>
+            <option value="price">💰 Lowest Price</option>
+            <option value="mileage">🛣️ Lowest Mileage</option>
+            <option value="newest">⏱️ Newest Discovered</option>
+          </select>
+        </div>
+      </div>
+      <div class="count-bar"><span id="count">0 deals found</span></div>
+      <div class="cars-grid" id="cars"></div>
+    </section>
+
+    <!-- SOURCES VIEW -->
+    <section id="sources" class="view-panel">
+      <h2>Active Listing Sources</h2>
+      <p class="subtitle">Scanners run automatically in the background overnight.</p>
+      <div id="source-list" class="source-grid"></div>
+    </section>
+
+    <!-- ACTIVITY VIEW -->
+    <section id="activity" class="view-panel">
+      <h2>Live Scanner Stream</h2>
+      <div class="activity-feed" id="activity-feed"></div>
+    </section>
+
+    <!-- SETTINGS VIEW -->
+    <section id="settings" class="view-panel">
+      <h2>Deal Hunter Preferences</h2>
+      <form id="settings-form" class="settings-card">
+        <div class="form-group">
+          <label>Target Zip Code</label>
+          <input type="text" id="pref-zip" value="75022">
+        </div>
+        <div class="form-group">
+          <label>Search Radius (Miles)</label>
+          <input type="number" id="pref-radius" value="100">
+        </div>
+        <div class="form-group">
+          <label>Maximum Price ($)</label>
+          <input type="number" id="pref-max-price" value="32000">
+        </div>
+        <div class="form-group">
+          <label>Ideal Deal Target ($)</label>
+          <input type="number" id="pref-ideal-price" value="28000">
+        </div>
+        <div class="form-group">
+          <label>Telegram Alert Score Threshold (0-100)</label>
+          <input type="number" id="pref-tg-threshold" value="70">
+          <small>Only listings scoring this number or higher will buzz your phone.</small>
+        </div>
+        <button type="submit" class="primary-btn">Save Settings</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- Modal for car detail -->
+  <dialog id="detail-modal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="modal-title">Vehicle Details</h3>
+        <button id="modal-close">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </dialog>
+</body>
+</html>

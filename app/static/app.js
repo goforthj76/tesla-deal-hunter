@@ -1,33 +1,270 @@
-let state, filter='ALL', initialized=false;
-const $=id=>document.getElementById(id);
-const money=n=>n==null?'Price unknown':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n);
-const el=(tag,text,cls)=>{const e=document.createElement(tag);if(text!=null)e.textContent=text;if(cls)e.className=cls;return e};
-function link(text,url,cls){const e=el('a',text,cls);try{const u=new URL(url);if(!['https:','http:'].includes(u.protocol))return el('span','Source URL unavailable');e.href=u.href;}catch{return el('span','Source URL unavailable')}e.target='_blank';e.rel='noopener noreferrer';return e}
-async function api(url,options){const r=await fetch(url,options);if(!r.ok)throw Error('Request failed ('+r.status+')');return r.json()}
-const dt=s=>s?new Date(s).toLocaleString():'Not yet';
-function render(){
- $('status').textContent=state.scanning?'Scanning '+state.scanning:'Scheduler running';
- $('summary').textContent=`${state.settings.radius}-mile radius · ${money(state.settings.max_price)} maximum · HW4 ${state.settings.require_hw4?'required':'preferred'}`;
- $('notice').textContent=state.limitations;
- const h=state.hunt;$('hunt-status').textContent=h?`${h.ended_at?'Finished':'Running'} since ${dt(h.started_at)} · ${h.delta.observations} observations · ${h.delta.unique_vins} new VINs · ${h.delta.scans} completed scans`:'No report started.';
- $('stats').replaceChildren();
- for(const [label,value] of [['Listing observations',state.stats.listings_scanned],['Unique VINs',state.stats.unique_vins],['Projected checks/hour',state.projected_checks_per_hour],['Dealers represented',state.dealers.length],['API calls remaining (local cap)',state.api_budget_remaining],['Scans completed',state.stats.scans_completed],['Process uptime',Math.floor(state.uptime/3600)+'h '+Math.floor(state.uptime%3600/60)+'m']]){const d=el('div',null,'stat');d.append(el('strong',value),el('span',label));$('stats').append(d)}
- $('filters').replaceChildren();for(const f of ['ALL','WATCH','MANUAL REVIEW','REJECTED','STARRED']){const n=state.vehicles.filter(v=>f==='ALL'||(f==='STARRED'?v.watched:v.category===f)).length;const b=el('button',f+' · '+n,f===filter?'selected':'');b.onclick=()=>{filter=f;render()};$('filters').append(b)}
- const term=$('search').value.toLowerCase();const vehicles=state.vehicles.filter(v=>(filter==='ALL'||(filter==='STARRED'?v.watched:v.category===filter))&&[v.vin,v.dealer,v.trim,v.model,v.year].join(' ').toLowerCase().includes(term));const sorting=$('sort').value;vehicles.sort((a,b)=>sorting==='price'?(a.price??Infinity)-(b.price??Infinity):sorting==='mileage'?(a.mileage??Infinity)-(b.mileage??Infinity):sorting==='newest'?new Date(b.first_seen)-new Date(a.first_seen):b.preference_score-a.preference_score);$('count').textContent=vehicles.length+' vehicles';$('cars').replaceChildren();
- for(const v of vehicles){const card=el('article',null,'car');if(v.image&&v.image.startsWith('https://')){const im=el('img');im.src=v.image;im.alt=`${v.year} ${v.model}`;im.loading='lazy';card.append(im)}const body=el('div',null,'car-body');body.append(el('span',v.category,'badge '+(v.category==='REJECTED'?'rejected':'')),el('h3',`${v.year} Tesla ${v.model}`),el('div',v.trim,'muted'),el('div',money(v.price),'price'),el('div',`${v.mileage==null?'Unknown mileage':v.mileage.toLocaleString()+' mi'} · ${v.distance==null?'Distance unverified':v.distance+' mi away'}`,'meta'),el('p',`${v.hw4} · ${v.fsd}`,'meta'),el('div',`${v.dealer} · ${v.source_count} source record(s)`,'meta'),el('p',v.reasons.join(' · ')||'Evidence pending. Preference match: '+v.preference_score+'/100','meta'));
- const actions=el('div',null,'actions'),details=el('button','Inspect evidence'),star=el('button',v.watched?'★ Saved':'☆ Save');details.onclick=()=>detail(v);star.onclick=async()=>{try{await api('/api/vehicles/'+v.vin+'/watch',{method:'POST'});await refresh()}catch(e){alert(e.message)}};actions.append(details,star);body.append(actions);card.append(body);$('cars').append(card)}
- if(!vehicles.length)$('cars').append(el('div','No vehicles in this category yet. We will not fill the dashboard with sample cars.','empty'));
- $('source-list').replaceChildren();const coverage=el('article',null,'panel');coverage.append(el('h3',state.dealers.length+' dealers represented in collected inventory'),el('p','These dealers appear through our connected sources; this is not a claim that every dealer website is monitored.'),el('p',state.dealers.join(' · ')));$('source-list').append(coverage);for(const s of state.sources){const p=el('article',null,'panel source');p.append(el('h3',s.name+' · '+s.status),el('p',s.error||'Collection operating normally'),el('div','Last success: '+dt(s.last_success),'meta'),el('div','Next scheduled: '+(s.status==='NOT CONFIGURED'?'Not scheduled':dt(s.next_scan*1000)),'meta'),el('p',`${s.observations} observations · ${s.scans} scans · ${s.api_calls} API calls this budget month`));$('source-list').append(p)}
- $('events').replaceChildren();for(const a of state.activity){const row=el('div',null,'event');row.append(el('time',dt(a.at)),el('span',a.message));$('events').append(row)}
- if(!initialized){buildSettings();buildResearch();initialized=true}
+let state = null;
+let currentFilter = 'ALL';
+const $ = (id) => document.getElementById(id);
+
+const money = (n) =>
+  n == null
+    ? 'Price unknown'
+    : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+
+async function api(url, options) {
+  const r = await fetch(url, options);
+  if (!r.ok) throw Error(`Request failed (${r.status})`);
+  return r.json();
 }
-async function detail(v){const root=$('detail-content');root.replaceChildren();root.append(el('h2',`${v.year} Tesla ${v.model}`),el('h3',money(v.price)),el('p',v.vin));for(const [k,val] of [['Status',v.status],['Preference match (not market deal score)',v.preference_score+'/100'],['HW4',v.hw4],['FSD',v.fsd],['History','UNKNOWN — seller claims are not independent reports'],['Battery health','UNKNOWN'],['Market value','Insufficient verified comparable data'],['FSD value credited','$0 until included software is verified'],['Subscription scenario',money(v.fsd_subscription_comparison)+' over '+state.settings.ownership_months+' months; assumes unchanged monthly price'],['First observed',dt(v.first_seen)],['Last observed',dt(v.last_seen)]])root.append(el('div',k+': '+val,'data-line'));root.append(el('h3','Risks and next steps'));const ul=el('ul');for(const r of [...v.reasons,...v.risks,'Request buyer’s order, full history report, AI computer screen, and written confirmation of included FSD.'])ul.append(el('li',r));root.append(ul,el('h3','Seller description (unverified)'),el('p',v.description||'Not provided'),el('h3','Sources'));for(const s of v.sources){root.append(link(s.name+' · '+money(s.price),s.url),el('p','Retrieved '+dt(s.observed)+' · '+s.status))}root.append(el('h3','Observed price history'));const history=el('div','Loading…');root.append(history);$('detail').showModal();try{const prices=await api('/api/vehicles/'+v.vin+'/prices');history.replaceChildren();for(const p of prices)history.append(el('p',dt(p.observed)+' — '+money(p.amount)))}catch(e){history.textContent=e.message}}
-function buildSettings(){const labels={latitude:'Search center latitude',longitude:'Search center longitude',radius:'Radius (miles)',max_price:'Maximum advertised price',ideal_max:'Ideal maximum price',preferred_mileage:'Preferred maximum mileage',dealer_interval_minutes:'Dealer scan interval (minutes; minimum 60)',api_interval_minutes:'API scan interval (minutes; minimum 360)',monthly_api_budget:'Monthly API call cap (maximum 500)',fsd_monthly:'FSD monthly scenario cost',ownership_months:'Expected ownership (months)'};$('fields').replaceChildren();for(const [key,label] of Object.entries(labels)){const l=el('label',label);const i=el('input');i.type='number';i.step='any';i.id='setting-'+key;i.value=state.settings[key];i.required=true;l.append(i);$('fields').append(l)}$('require_hw4').checked=state.settings.require_hw4;$('settings-form').onsubmit=async e=>{e.preventDefault();const p={...state.settings};for(const key of Object.keys(labels))p[key]=Number($('setting-'+key).value);p.require_hw4=$('require_hw4').checked;try{await api('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});$('saved').textContent='Saved. New preferences apply immediately; collection follows its existing schedule.';await refresh()}catch(err){$('saved').textContent=err.message}}}
-function buildResearch(){for(const [name,query] of [['CarMax — native alerts; not automatically scanned','site:carmax.com Tesla Model Y Model 3 Dallas'],['Local dealers','Tesla Model Y Model 3 used Flower Mound Lewisville Denton Grapevine'],['Tesla inventory','site:tesla.com/inventory used Model Y Dallas'],['Cars.com','site:cars.com Tesla Model Y 2024 Lewisville'],['AutoTrader','site:autotrader.com Tesla Model Y 2024 Flower Mound'],['CarGurus','site:cargurus.com Tesla Model Y Dallas'],['Paid FSD leads','Tesla "FSD paid" OR "full self driving paid" Dallas Fort Worth Model 3 Model Y']]){const p=el('div',null,'panel');p.append(el('h3',name),el('p','Manual discovery · not monitored'),link('Open search ↗','https://www.google.com/search?q='+encodeURIComponent(query),'action'));$('research-links').append(p)}}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==b.dataset.view);document.querySelectorAll('nav button').forEach(n=>n.classList.toggle('selected',n===b))});$('close-detail').onclick=()=>$('detail').close();
-async function refresh(){try{state=await api('/api/state');render()}catch(e){$('status').textContent='Disconnected';$('notice').textContent='Cannot reach the scanner. Displayed data may be stale. '+e.message}}
-refresh();setInterval(refresh,5000);
 
-$('search').addEventListener('input',()=>{if(state)render()});$('sort').addEventListener('change',()=>{if(state)render()});
+async function refresh() {
+  try {
+    state = await api('/api/state');
+    render();
+  } catch (err) {
+    $('status').textContent = 'Error connecting';
+    $('status').style.color = '#f85149';
+  }
+}
 
-for(const action of ['start','finish'])$('hunt-'+action).onclick=async()=>{try{await api('/api/hunt/'+action,{method:'POST'});await refresh()}catch(e){alert(e.message)}};
+function render() {
+  if (!state) return;
+
+  // Header status
+  $('status').textContent = state.scanning ? `Scanning ${state.scanning}...` : 'Monitoring Active';
+  $('status').style.color = state.scanning ? '#d29922' : '#3fb950';
+
+  if (state.settings) {
+    $('summary-sub').textContent = `Zip ${state.settings.zip_code || '75022'} · ${state.settings.radius}mi · Max ${money(state.settings.max_price)}`;
+  }
+
+  // Telegram status banner
+  const tgBanner = $('tg-banner');
+  const tgText = $('tg-status-text');
+  if (state.telegram_configured) {
+    tgText.textContent = `📱 Telegram Connected: Buzzing on deals with score >= ${state.settings?.telegram_alert_threshold || 70}`;
+    tgBanner.style.borderColor = '#238636';
+  } else {
+    tgText.textContent = '⚠️ Telegram not configured in .env (add TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID for phone alerts)';
+    tgBanner.style.borderColor = '#d29922';
+  }
+
+  // Stats Grid
+  const statsEl = $('stats');
+  statsEl.innerHTML = `
+    <div class="stat-card"><strong>${state.stats?.listings_scanned || 0}</strong><span>Listings Tracked</span></div>
+    <div class="stat-card"><strong>${state.stats?.unique_vins || 0}</strong><span>Unique VINs</span></div>
+    <div class="stat-card"><strong>${state.vehicles?.filter(v => (v.deal_score || 0) >= 70).length || 0}</strong><span>Deals (Score 70+)</span></div>
+    <div class="stat-card"><strong>${state.sources?.filter(s => s.status === 'HEALTHY' || s.status === 'SCANNING').length || 0} / ${state.sources?.length || 0}</strong><span>Sources Active</span></div>
+  `;
+
+  // Filters
+  const filtersEl = $('filters');
+  const categories = ['ALL', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', 'STARRED'];
+  filtersEl.innerHTML = categories
+    .map((c) => {
+      let count = 0;
+      if (c === 'ALL') count = state.vehicles.length;
+      else if (c === 'STARRED') count = state.vehicles.filter((v) => v.watched).length;
+      else count = state.vehicles.filter((v) => v.category === c).length;
+      return `<button class="filter-chip ${c === currentFilter ? 'selected' : ''}" data-cat="${c}">${c} (${count})</button>`;
+    })
+    .join('');
+
+  // Vehicles List
+  renderVehicles();
+
+  // Sources tab
+  const sourcesEl = $('source-list');
+  if (sourcesEl && state.sources) {
+    sourcesEl.innerHTML = state.sources
+      .map(
+        (s) => `
+        <div class="source-card">
+          <h4>${s.name}</h4>
+          <p style="font-size:0.8rem; color:var(--muted)">Status: <b style="color:${s.status === 'HEALTHY' ? '#3fb950' : '#8b949e'}">${s.status}</b></p>
+          <p style="font-size:0.8rem; color:var(--muted)">Found: ${s.observations} listings</p>
+          <button class="sm-btn" style="margin-top:6px;" onclick="triggerScan('${s.name}')">Scan Now</button>
+        </div>
+      `
+      )
+      .join('');
+  }
+
+  // Activity Feed
+  const actEl = $('activity-feed');
+  if (actEl && state.activity) {
+    actEl.innerHTML = state.activity
+      .map((a) => `<div class="act-row"><span>[${a.at.slice(11, 19)}]</span> ${a.message}</div>`)
+      .join('');
+  }
+}
+
+function renderVehicles() {
+  const query = ($('search')?.value || '').toLowerCase();
+  const sort = $('sort')?.value || 'score';
+
+  let list = state.vehicles.filter((v) => {
+    if (currentFilter === 'STARRED') return v.watched;
+    if (currentFilter !== 'ALL' && v.category !== currentFilter) return false;
+    if (!query) return true;
+    const hay = [v.vin, v.model, v.trim, v.dealer, v.year, v.source].join(' ').toLowerCase();
+    return hay.includes(query);
+  });
+
+  list.sort((a, b) => {
+    if (sort === 'score') return (b.deal_score || 0) - (a.deal_score || 0);
+    if (sort === 'price') return (a.price || 999999) - (b.price || 999999);
+    if (sort === 'mileage') return (a.mileage || 999999) - (b.mileage || 999999);
+    if (sort === 'newest') return new Date(b.first_seen) - new Date(a.first_seen);
+    return 0;
+  });
+
+  $('count').textContent = `${list.length} Tesla deal(s) matching criteria`;
+
+  const carsEl = $('cars');
+  if (!list.length) {
+    carsEl.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--muted)">No listings found matching this filter yet. Hit "⚡ Scan All Now" to pull fresh listings!</div>`;
+    return;
+  }
+
+  carsEl.innerHTML = list
+    .map((v) => {
+      const score = v.deal_score || 50;
+      let scoreClass = 'score-fair';
+      if (score >= 82) scoreClass = 'score-hot';
+      else if (score >= 70) scoreClass = 'score-great';
+      else if (score >= 55) scoreClass = 'score-good';
+
+      const reasonsPreview = (v.reasons || []).slice(0, 2).join(' · ');
+      const img = v.image || 'https://digitalassets.tesla.com/compositor/?model=m3&view=STUD_FRONT34&size=600';
+
+      return `
+      <article class="car-card">
+        <div class="car-img-wrap">
+          <img src="${img}" alt="${v.year} ${v.model}" loading="lazy" onerror="this.src='https://digitalassets.tesla.com/compositor/?model=m3&view=STUD_FRONT34&size=600'">
+          <div class="deal-score-badge ${scoreClass}">
+            ★ ${score}/100
+          </div>
+        </div>
+        <div class="car-body">
+          <div class="price-row">
+            <span class="car-price">${money(v.price)}</span>
+            <span style="font-size:0.75rem; color:var(--muted)">${v.source}</span>
+          </div>
+          <h3>${v.year || ''} Tesla ${v.model}</h3>
+          <p class="car-meta">${v.trim || 'Standard Range'}</p>
+          <p class="car-meta">🛣️ ${v.mileage ? v.mileage.toLocaleString() + ' mi' : 'Unknown miles'} · 📍 ${v.distance ? v.distance + ' mi away' : 'Distance unverified'}</p>
+          <div class="car-tags">
+            <span class="tag">${v.category}</span>
+            <span class="tag">${v.hw4 || 'Hardware info'}</span>
+            <span class="tag">${v.dealer || 'Dealer'}</span>
+          </div>
+          ${reasonsPreview ? `<div class="reasons-box">💡 ${reasonsPreview}</div>` : ''}
+          <div class="card-actions">
+            <a href="${v.url}" target="_blank" rel="noopener noreferrer" class="link-btn">🔗 Go To Listing</a>
+            <button class="star-btn" onclick="toggleWatch('${v.vin}')">${v.watched ? '★' : '☆'}</button>
+          </div>
+        </div>
+      </article>
+    `;
+    })
+    .join('');
+}
+
+async function toggleWatch(vin) {
+  try {
+    await api(`/api/vehicles/${vin}/watch`, { method: 'POST' });
+    await refresh();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function triggerScan(source) {
+  try {
+    await api(`/api/scan/${source}`, { method: 'POST' });
+    alert(`Started scan for ${source}`);
+    refresh();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  refresh();
+  setInterval(refresh, 5000);
+
+  // Tab switching
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('selected'));
+      document.querySelectorAll('.view-panel').forEach((p) => p.classList.remove('active'));
+      btn.classList.add('selected');
+      const target = btn.dataset.view;
+      if ($(target)) $(target).classList.add('active');
+    });
+  });
+
+  // Filters delegation
+  $('filters').addEventListener('click', (e) => {
+    if (e.target.dataset.cat) {
+      currentFilter = e.target.dataset.cat;
+      render();
+    }
+  });
+
+  $('search')?.addEventListener('input', renderVehicles);
+  $('sort')?.addEventListener('change', renderVehicles);
+
+  // Scan all button
+  $('btn-scan-now')?.addEventListener('click', async () => {
+    $('btn-scan-now').disabled = true;
+    $('btn-scan-now').textContent = 'Scanning All...';
+    try {
+      await api('/api/scan-all', { method: 'POST' });
+      setTimeout(refresh, 2000);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      $('btn-scan-now').disabled = false;
+      $('btn-scan-now').textContent = '⚡ Scan All Now';
+    }
+  });
+
+  // Telegram test button
+  $('tg-test-btn')?.addEventListener('click', async () => {
+    $('tg-test-btn').textContent = 'Testing...';
+    try {
+      const res = await api('/api/telegram/test', { method: 'POST' });
+      if (res.success) {
+        alert('✅ Test alert sent to Telegram! Check your phone.');
+      } else {
+        alert('❌ Telegram test failed: ' + res.error);
+      }
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      $('tg-test-btn').textContent = 'Send Test Alert';
+    }
+  });
+
+  // Settings form
+  $('settings-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      zip_code: $('pref-zip').value,
+      radius: parseInt($('pref-radius').value, 10),
+      max_price: parseInt($('pref-max-price').value, 10),
+      ideal_max: parseInt($('pref-ideal-price').value, 10),
+      telegram_alert_threshold: parseInt($('pref-tg-threshold').value, 10),
+    };
+    try {
+      await api('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      alert('Settings saved!');
+      refresh();
+    } catch (err) {
+      alert('Error saving settings: ' + err.message);
+    }
+  });
+});
