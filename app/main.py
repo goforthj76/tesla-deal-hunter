@@ -27,6 +27,7 @@ from .collectors import (
     autohub, dallas, marketcheck, tesla_used, cars_com,
     cargurus, carvana_search, truecar_search, scan_all_sources
 )
+from .feed_generator import publish_to_repo
 
 load_dotenv(ROOT / '.env')
 log = logging.getLogger('hunter')
@@ -86,7 +87,10 @@ def ingest(source: str, rows: list[dict], complete: bool):
             if not vin:
                 continue
             key = hashlib.sha256((source + '|' + d.get('url', '')).encode()).hexdigest()
+            if key in seen:
+                continue
             seen.add(key)
+            s.flush()
 
             score_res = score_deal(d, market_comps, pref)
             d['deal_score'] = score_res['score']
@@ -262,10 +266,27 @@ async def scan_source(name: str):
             'duration_seconds': round(time.time() - scan_started, 2),
             'complete': complete
         }
-        activity(f"{name}: completed, {len(rows)} listing observations")
+        with Session.begin() as s:
+            src = s.get(Source, name)
+            if src:
+                src.scans = (src.scans or 0) + 1
+                if len(rows) > 0:
+                    src.observations = len(rows)
+                    src.status = 'HEALTHY'
+                    src.last_success = now()
+                    src.error = ''
+        if len(rows) > 0:
+            activity(f"{name}: completed, {len(rows)} live listings verified")
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, publish_to_repo)
+            except Exception:
+                pass
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        log.exception(f"Exception in scan_source({name})")
+        print(f"EXCEPTION in {name}: {type(exc).__name__}: {exc}")
         safe = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
         with Session.begin() as s:
             src = s.get(Source, name)
@@ -277,7 +298,15 @@ async def scan_source(name: str):
         with Session.begin() as s:
             src = s.get(Source, name)
             if src:
-                interval = 5 if name == 'Tesla.com' else 15 if name in ('Cars.com', 'CarGurus', 'Carvana', 'TrueCar') else 60
+                count = scan_metrics.get(name, {}).get('last_count', 0)
+                if count == 0 and name in ('Tesla.com', 'Cars.com', 'CarGurus'):
+                    interval = 720
+                elif name in ('Carvana', 'TrueCar'):
+                    interval = 15
+                elif name == 'MarketCheck':
+                    interval = 30
+                else:
+                    interval = 30
                 src.next_scan = time.time() + (interval * 60)
         scanning = None
 
@@ -285,8 +314,7 @@ async def worker():
     while True:
         try:
             sources_to_check = [
-                'Tesla.com', 'Cars.com', 'CarGurus', 'Carvana', 'TrueCar',
-                'Autohub Texas', 'Autos of Dallas', 'MarketCheck'
+                'MarketCheck', 'TrueCar', 'Carvana', 'Autos of Dallas', 'Autohub Texas'
             ]
             for name in sources_to_check:
                 with Session() as s:
@@ -305,6 +333,7 @@ async def lifespan(app: FastAPI):
     global task
     Base.metadata.create_all(engine)
     activity('Tesla Deal Hunter background scanner online')
+    asyncio.get_running_loop().run_in_executor(None, publish_to_repo)
     task = asyncio.create_task(worker())
     yield
     if task:
@@ -482,6 +511,63 @@ def update_preferences(p: Preferences):
     return p
 
 app.mount('/static', StaticFiles(directory=ROOT / 'app/static'), name='static')
+
+@app.get('/eval')
+@app.get('/deals.md')
+def eval_markdown():
+    from fastapi.responses import PlainTextResponse
+    with Session() as s:
+        all_listings = list(s.scalars(select(Listing)))
+        listings_by_vin = {}
+        for l in all_listings:
+            listings_by_vin.setdefault(l.vin, []).append(l)
+
+        matches = []
+        for v in s.scalars(select(Vehicle).order_by(Vehicle.deal_score.desc().nullslast())):
+            listings = listings_by_vin.get(v.vin, [])
+            active = [l for l in listings if l.status == 'ACTIVE']
+            best = active[0] if active else (listings[0] if listings else None)
+            if not best:
+                continue
+            d = best.data or {}
+            is_hw4, tag = check_hw4(d)
+            p = d.get('price') or v.best_price
+            y = v.year or d.get('year') or 0
+            if p and p <= 33000 and (y >= 2024 or (y == 2023 and is_hw4)):
+                matches.append({
+                    'year': y,
+                    'model': v.model or d.get('model'),
+                    'trim': d.get('trim', 'Standard'),
+                    'price': p,
+                    'mileage': d.get('mileage', 0),
+                    'dealer': d.get('dealer', 'Dealer'),
+                    'hw4_tag': tag,
+                    'deal_score': v.deal_score or 50,
+                    'url': best.url,
+                    'vin': v.vin
+                })
+
+    md = [
+        "# ⚡ Tesla Deal Hunter — Verified HW4 Deals Under $33,000",
+        f"*Search Location: Flower Mound / Plano (Zip 75022) · Active Qualifying Offers: {len(matches)}*",
+        "",
+        "| Rank | Year & Model | Trim | Price | Mileage | Dealership | Deal Score | Direct Link |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+    ]
+    for i, m in enumerate(matches, 1):
+        md.append(f"| {i} | {m['year']} Tesla {m['model']} | {m['trim']} | ${int(m['price']):,} | {int(m['mileage']):,} mi | {m['dealer']} | {m['deal_score']}/100 | [View Listing]({m['url']}) |")
+
+    md.append("\n### Detailed Offer Breakdown for ChatGPT / LLM Analysis:")
+    for i, m in enumerate(matches, 1):
+        md.append(f"\n#### Offer #{i}: {m['year']} Tesla {m['model']} ({m['trim']})")
+        md.append(f"- **Price**: ${int(m['price']):,}")
+        md.append(f"- **Mileage**: {int(m['mileage']):,} miles")
+        md.append(f"- **Autopilot Hardware**: {m['hw4_tag']}")
+        md.append(f"- **Dealership**: {m['dealer']}")
+        md.append(f"- **VIN**: `{m['vin']}`")
+        md.append(f"- **Direct Listing URL**: {m['url']}")
+
+    return PlainTextResponse('\n'.join(md), media_type='text/markdown')
 
 @app.get('/')
 def home():

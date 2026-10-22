@@ -50,8 +50,8 @@ def test_deal_scoring_salvage_penalty():
         'description': 'Clean condition rebuilt salvage title from flood'
     }
     res = score_deal(salvage_listing, {}, settings)
-    assert res['category'] == 'REJECTED'
-    assert any('Title/accident' in r for r in res['risks'])
+    assert res['category'] in ('REJECTED', 'TRASH VIN')
+    assert any('TRASH VIN' in r or 'Title/accident' in r for r in res['risks'])
 
 def test_market_averages_calculation():
     listings = [

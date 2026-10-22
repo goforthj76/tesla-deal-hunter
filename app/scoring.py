@@ -267,28 +267,39 @@ def score_deal(listing: dict, market_averages: dict | None = None, settings: dic
         modifier -= 30.0
         risks.append("Pre-2024 / HW3 model (HW4 required)")
     
-    adverse = bool(re.search(r'\b(salvage|rebuilt|lemon|buyback|flood|total loss|frame damage|junk)\b', desc))
+    title_str = str(listing.get('title', '')).lower()
+    dealer_str = str(listing.get('dealer', '')).lower()
+    combined_text = f"{desc} {title_str} {str(listing.get('trim', '')).lower()}"
+    adverse_kw = bool(re.search(r'\b(salvage|rebuilt|lemon|buyback|flood|total loss|frame damage|junk|parts only|structural|branded|trueframe)\b', combined_text))
+    
+    adverse = False
+    if 'autosavvy' in dealer_str:
+        adverse = True
+        risks.append("TRASH VIN: AutoSavvy branded/rebuilt title inventory")
+    elif listing.get('carfax_clean_title') is False:
+        adverse = True
+        risks.append("TRASH VIN: Carfax verified adverse/salvage title")
+    elif adverse_kw:
+        adverse = True
+        risks.append("TRASH VIN: Title/damage keywords detected in listing")
+
     if adverse:
-        modifier -= 25.0
-        risks.append("WARNING: Title/accident damage keywords detected in description")
-
-    if not listing.get('image'):
-        modifier -= 5.0
-
-    final_score = max(0, min(100, int(round(raw_score + modifier))))
-
-    if adverse or final_score < 30:
-        cat = 'REJECTED'
-    elif final_score >= 82:
-        cat = 'HOT DEAL'
-    elif final_score >= 70:
-        cat = 'GREAT DEAL'
-    elif final_score >= 55:
-        cat = 'GOOD DEAL'
-    elif final_score >= 40:
-        cat = 'FAIR'
+        final_score = 0
+        cat = 'TRASH VIN'
     else:
-        cat = 'OVERPRICED'
+        final_score = max(0, min(100, int(round(raw_score + modifier))))
+        if final_score < 30:
+            cat = 'REJECTED'
+        elif final_score >= 82:
+            cat = 'HOT DEAL'
+        elif final_score >= 70:
+            cat = 'GREAT DEAL'
+        elif final_score >= 55:
+            cat = 'GOOD DEAL'
+        elif final_score >= 40:
+            cat = 'FAIR'
+        else:
+            cat = 'OVERPRICED'
 
     return {
         'score': final_score,

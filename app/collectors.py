@@ -335,7 +335,7 @@ async def carvana_search(settings: dict, emit) -> tuple[list[dict], bool]:
 
     loop = asyncio.get_event_loop()
     try:
-        for p in range(1, 5):
+        for p in range(1, 8):
             html = await loop.run_in_executor(None, fetch_page, p)
             soup = BeautifulSoup(html, 'html.parser')
             scripts = soup.find_all('script', type='application/ld+json')
@@ -532,7 +532,7 @@ async def truecar_search(settings: dict, emit) -> tuple[list[dict], bool]:
 
     loop = asyncio.get_event_loop()
     try:
-        for p in range(1, 4):
+        for p in range(1, 8):
             html = await loop.run_in_executor(None, fetch_page, p)
             soup = BeautifulSoup(html, 'html.parser')
             cards = soup.find_all('div', attrs={'data-test': 'vehicleListingCard'})
@@ -649,7 +649,7 @@ async def marketcheck(api_key: str, pref: dict, emit, reserve_call=None) -> tupl
     
     emit(f"MarketCheck: querying live dealer network for zip {zip_code}...")
     async with httpx.AsyncClient(timeout=25) as client:
-        for start in range(0, 350, 50):
+        for start in range(0, 850, 50):
             if reserve_call:
                 try:
                     reserve_call()
@@ -719,6 +719,8 @@ async def marketcheck(api_key: str, pref: dict, emit, reserve_call=None) -> tupl
                     'longitude': float(dealer['longitude']) if dealer.get('longitude') else None,
                     'url': url,
                     'source': 'MarketCheck',
+                    'carfax_clean_title': v.get('carfax_clean_title'),
+                    'carfax_1_owner': v.get('carfax_1_owner'),
                     'description': v.get('heading', 'Dealer Inventory'),
                     'image': img,
                     'availability': 'Active Dealership Listing'

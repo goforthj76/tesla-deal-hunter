@@ -56,13 +56,14 @@ function render() {
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', '⚡ HW4 / 2024+', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', 'STARRED'];
+  const categories = ['ALL', '⚡ HW4 / 2024+', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', '🗑️ Trash VINs', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;
-      if (c === 'ALL') count = state.vehicles.length;
+      if (c === 'ALL') count = state.vehicles.filter((v) => v.category !== 'TRASH VIN').length;
       else if (c === 'STARRED') count = state.vehicles.filter((v) => v.watched).length;
-      else if (c === '⚡ HW4 / 2024+') count = state.vehicles.filter((v) => (v.year && v.year >= 2024) || (v.hw4 && v.hw4.includes('HW4'))).length;
+      else if (c === '⚡ HW4 / 2024+') count = state.vehicles.filter((v) => v.category !== 'TRASH VIN' && ((v.year && v.year >= 2024) || (v.hw4 && v.hw4.includes('HW4')))).length;
+      else if (c === '🗑️ Trash VINs') count = state.vehicles.filter((v) => v.category === 'TRASH VIN').length;
       else count = state.vehicles.filter((v) => v.category === c).length;
       return `<button class="filter-chip ${c === currentFilter ? 'selected' : ''}" data-cat="${c}">${c} (${count})</button>`;
     })
@@ -103,6 +104,8 @@ function renderVehicles() {
 
   let list = state.vehicles.filter((v) => {
     if (currentFilter === 'STARRED') return v.watched;
+    if (currentFilter === '🗑️ Trash VINs') return v.category === 'TRASH VIN';
+    if (v.category === 'TRASH VIN') return false;
     if (currentFilter === '⚡ HW4 / 2024+') {
       return (v.year && v.year >= 2024) || (v.hw4 && v.hw4.includes('HW4'));
     }

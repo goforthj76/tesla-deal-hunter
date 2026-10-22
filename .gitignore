@@ -8,6 +8,7 @@ __pycache__/
 *.db
 *.sqlite*
 *.log
+*.exe
 node_modules/
 .openai/
 dist/
