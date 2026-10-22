@@ -1,0 +1,3 @@
+import {read,write,event,vinValid} from '../../../lib/hunter';
+export async function POST(request:Request){const origin=request.headers.get('origin');if(origin&&origin!==new URL(request.url).origin)return Response.json({error:'Invalid origin'},{status:403});const b:any=await request.json();if(!vinValid(b.vin||''))return Response.json({error:'Invalid VIN'},{status:400});const v=await read('vin:'+b.vin);if(!v)return Response.json({error:'Not found'},{status:404});v.watched=!v.watched;await write('vin:'+v.vin,v);await event('watch',`${v.vin}: ${v.watched?'saved':'removed from watchlist'}`);return Response.json({watched:v.watched})}
+
