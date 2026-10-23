@@ -75,3 +75,21 @@ def test_actual_case_rwd_vs_reported_long_range():
  d=investigate([obs('5YJ3E1EA4RF862917',trim='RWD')],[claim('trim','Long Range')],P)
  assert any('MISIDENTIFIED' in x for x in d['opportunities'])
  assert not any('MISIDENTIFIED' in x for x in investigate([obs('x',trim='Long Range RWD')],[],P)['opportunities'])
+
+def test_negation_does_not_hide_separate_total_loss():
+ from app.investigator import adverse_claim
+ assert adverse_claim('No frame damage, insurance total loss')
+ assert adverse_claim('Total loss and no structural damage')
+ assert not adverse_claim('No structural damage reported')
+
+def test_region_label_not_store_conflict():
+ d=investigate([obs('x',address='DFW Area'),obs('x',address='Fort Worth, TX')],[],P)
+ assert not any(c['field']=='location' for c in d['conflicts'])
+ d=investigate([obs('x',address='Fort Worth, TX'),obs('x',address='Orlando, FL')],[],P)
+ assert any(c['field']=='location' for c in d['conflicts'])
+
+def test_marketplace_claim_is_not_seller_evidence():
+ o=obs('x',trim='RWD');o['source']='TrueCar'
+ d=investigate([o],[],P)
+ assert d['claims'][0]['kind']=='aggregator'
+ assert d['freshness']=='STALE OR UNVERIFIED'

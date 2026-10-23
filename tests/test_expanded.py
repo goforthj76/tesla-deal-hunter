@@ -48,7 +48,11 @@ def test_exact_vin_research_requires_matching_vin():
  from test_core import VIN
  assert vin_result_matches({'content':'auction '+VIN},VIN)
  assert not vin_result_matches({'title':'Tesla salvage cars'},VIN)
+ assert not vin_result_matches({'content':'X'+VIN+'9'},VIN)
  car={'vin':VIN,'year':2024,'price':30000,'mileage':12000}
  assert choose_vin_task([car],{},1000000)==VIN
  assert choose_vin_task([car],{VIN:999999},1000000) is None
  assert choose_vin_task([{**car,'price':500}],{},1000000) is None
+ assert choose_vin_task([car],{},1000000,max_price=29000) is None
+ assert choose_vin_task([{**car,'price':38000}],{},1000000,max_price=40000)==VIN
+ assert choose_vin_task([{**car,'year':'unknown'}],{},1000000) is None
