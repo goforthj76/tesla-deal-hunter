@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, String, JSON, Float, Integer, Boolean, Text, event
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, synonym
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +18,10 @@ class Vehicle(Base):
     first_seen: Mapped[str] = mapped_column(String, default=now)
     last_seen: Mapped[str] = mapped_column(String, default=now)
     watched: Mapped[bool] = mapped_column(Boolean, default=False)
+    deal_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 class Listing(Base):
     __tablename__ = 'listings'
@@ -54,8 +58,9 @@ class Source(Base):
 class Activity(Base):
     __tablename__ = 'activity'
     id: Mapped[int] = mapped_column(primary_key=True)
-    at: Mapped[str] = mapped_column(String, default=now)
+    created: Mapped[str] = mapped_column(String, default=now)
     message: Mapped[str] = mapped_column(Text)
+    at = synonym('created')
 
 class Setting(Base):
     __tablename__ = 'settings'

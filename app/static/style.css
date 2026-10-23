@@ -1,6 +1,3 @@
-:root{font-family:Inter,Segoe UI,system-ui,sans-serif;color:#eaf1ed;background:#0c1513;color-scheme:dark;font-size:15px}*{box-sizing:border-box}body{margin:0}header{padding:24px 5%;border-bottom:1px solid #2b3933;display:flex;align-items:center;justify-content:space-between}.brand{font-size:24px;font-weight:850;letter-spacing:-1px;color:#fff;text-decoration:none}.brand span{color:#b0f588}.brand small{font-size:11px;letter-spacing:2px;margin-left:15px;font-weight:550}main{max-width:1240px;margin:auto;padding:48px 28px}.eyebrow{color:#b0f588;font-size:11px;letter-spacing:2.5px;font-weight:700}h1{font-size:clamp(38px,5vw,66px);letter-spacing:-2.5px;line-height:1.05;margin:18px 0}h1 span{color:#8eaaa0}.intro{color:#b4c5bb;font-size:16px}.pill,.badge{padding:7px 12px;border:1px solid #45604c;border-radius:30px;font-size:11px;color:#c1eba9}.notice{border-left:3px solid #bfcc70;background:#1d2922;padding:16px 20px;margin:30px 0;color:#c8d3b7;font-size:13px;line-height:1.6}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.stat{padding:22px;background:#14211c;border:1px solid #2d3a32;border-radius:12px}.stat strong{display:block;font-size:30px;font-weight:600}.stat span{font-size:11px;color:#9aafa1;text-transform:uppercase;letter-spacing:1px}nav{display:flex;gap:8px;border-bottom:1px solid #334239;margin:30px 0;overflow:auto;padding-bottom:10px}button,a.action{font:inherit;cursor:pointer;background:#1d3026;color:#dce9de;border:1px solid #405448;border-radius:8px;padding:11px 16px;text-decoration:none}button:hover,a.action:hover{background:#344a3a}button.selected,.primary{background:#b0f588;color:#142111;border-color:#b0f588}nav button{white-space:nowrap;border:0;background:transparent}.section-head{display:flex;align-items:center;justify-content:space-between}h2{font-weight:550;letter-spacing:-.5px}.filters{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 24px}.filters button{font-size:12px}.cars,.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.car,.panel{border:1px solid #34463a;border-radius:14px;background:#14221b;overflow:hidden}.car img{width:100%;height:200px;object-fit:cover;background:#26352c}.car-body,.panel{padding:22px}.car h3{font-size:20px;margin:14px 0 6px}.muted,p{color:#a6bbac;line-height:1.6}.car .price{font-size:29px;font-weight:600;margin:16px 0}.car .meta{font-size:13px}.car .actions{display:flex;gap:8px;margin-top:18px}.car .actions button:first-child{flex:1}.badge{display:inline-block;font-size:10px}.rejected{color:#f2b3a4;border-color:#79564e}.empty{grid-column:1/-1;padding:40px;border:1px dashed #455948;border-radius:12px;text-align:center}.source{margin-bottom:14px}.source h3{display:flex;justify-content:space-between;gap:15px}.event{padding:14px 10px;border-bottom:1px solid #2d4032;display:flex;gap:20px;font-family:Consolas,monospace;font-size:12px}.event time{color:#8da989;white-space:nowrap}.fields{display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:700px;margin-bottom:24px}label{display:block;color:#bad0bd;font-size:13px}input:not([type=checkbox]){display:block;width:100%;margin-top:8px;padding:12px;border:1px solid #445a48;background:#14231b;color:white;border-radius:6px}form .primary{display:block;margin-top:20px}footer{font-size:11px;color:#819e87;margin:60px 0 10px;line-height:1.8}dialog{max-width:760px;width:94%;max-height:90vh;border:1px solid #526b52;border-radius:15px;background:#14221b;color:#e9f1e8;padding:28px}dialog::backdrop{background:#000b}dialog img{max-width:100%;border-radius:10px}dialog a{color:#c3f69e}dialog li{margin-bottom:8px;color:#bdd0bd}.data-line{padding:12px 0;border-bottom:1px solid #304834;overflow-wrap:anywhere}#close-detail{float:right}#saved{color:#b0f588}@media(max-width:760px){.cars,.cards{grid-template-columns:1fr 1fr}.stats{grid-template-columns:1fr 1fr}main{padding:30px 18px}.brand small{display:none}.fields{grid-template-columns:1fr}.event{display:block}}@media(max-width:520px){.cars,.cards{grid-template-columns:1fr}.stat{padding:16px}.stat strong{font-size:27px}.car img{height:220px}h1{letter-spacing:-1.5px}.section-head{display:block}}
-
-select{display:block;width:100%;padding:12px;margin-top:8px;background:#14231b;color:#eaf1ed;border:1px solid #445a48;border-radius:6px}
 :root {
   --bg: #0d1117;
   --surface: #161b22;
@@ -397,8 +394,83 @@ main {
   cursor: pointer;
   width: 100%;
 }
-/* Unified layout: one dashboard, shared API and evidence model. */
-:root{background:#0d1117;color:#e6edf3}body{background:#0d1117;color:#e6edf3}header{background:#161b22}main{max-width:1440px;margin:auto}h1{font-size:clamp(32px,5vw,58px)}h1 span,.brand span{color:#58a6ff}.car,.panel,.stat,dialog{background:#161b22;border-color:#30363d}.cars{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px}.car img{height:190px;object-fit:cover}.car-body{padding:20px}.badge{color:#79c0ff;background:#182b43}.badge.rejected{color:#ffa198;background:#3d2025}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}.stat strong{color:#f0f6fc}button.selected,.primary{background:#238636;color:white}nav{display:flex;gap:8px;flex-wrap:wrap}button:focus-visible,a:focus-visible{outline:3px solid #58a6ff;outline-offset:3px}.fields{max-width:none}input,select{background:#0d1117!important;color:#e6edf3!important;border-color:#30363d!important}.notice{border-left:3px solid #d29922;background:#231e12;color:#e3c587}.view[hidden]{display:none!important}dialog{color:#e6edf3;max-width:760px;width:94%;padding:24px}footer{color:#8b949e}.source{margin:12px 0}.meta,.muted{color:#8b949e}.actions{display:flex;gap:8px}.panel{padding:18px;margin-bottom:14px}.intro{color:#8b949e}
-
-/* Preserve Antigravity's compact dashboard identity. */
-header{display:block}.header-inner{width:100%;max-width:1200px}.brand{font-size:inherit;letter-spacing:normal}.brand strong{font-size:16px}.brand .logo-badge{color:white;background:#e82127}.brand small{margin:0;letter-spacing:normal;font-size:12px}main{max-width:1200px;margin:16px auto}nav{border-bottom:1px solid #30363d;margin:18px 0}nav button{background:transparent;border:0;border-radius:0;padding:12px 16px;color:#8b949e}nav button.selected{color:#58a6ff;background:transparent;border-bottom:2px solid #58a6ff}.filters button{border-radius:20px;padding:6px 14px;background:#21262d;border:1px solid #30363d}.filters button.selected{background:#1f6feb;border-color:#58a6ff;color:white}.cars{gap:16px}.car{align-self:start;overflow:hidden}.car-body{padding:16px}.car h3{margin:10px 0 4px}.car .price{color:#3fb950;font-size:26px;margin:10px 0}.actions button{background:#21262d;border:1px solid #30363d;border-radius:6px}.actions button:first-child{background:#1f6feb;color:white}.stat{padding:12px;border-radius:8px}.stat strong{font-size:26px}.stat span{font-size:12px}.notice{font-size:12px;padding:10px 14px}.panel{font-size:14px}.section-head h2{font-size:20px}@media(max-width:600px){.brand strong{font-size:12px}.header-inner{gap:8px}.brand small{font-size:10px}.pill{font-size:10px}nav{gap:0}nav button{padding:10px;font-size:12px}.cars{grid-template-columns:1fr}}
+/* Vehicle Detail Modal */
+dialog#detail-modal {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  max-width: 680px;
+  width: 92%;
+  max-height: 85vh;
+  padding: 0;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+  margin: auto;
+}
+dialog#detail-modal::backdrop {
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(2px);
+}
+.modal-box {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: #1c2128;
+}
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+#modal-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+#modal-close:hover {
+  color: #fff;
+}
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+.modal-body .detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.6);
+}
+.modal-body .detail-label {
+  color: var(--muted);
+}
+.modal-body .detail-val {
+  font-weight: 500;
+  text-align: right;
+}
+.modal-body h4 {
+  margin: 16px 0 8px;
+  color: var(--accent);
+}
+.details-btn {
+  background: #21262d;
+  color: #e6edf3;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.details-btn:hover {
+  background: #30363d;
+}

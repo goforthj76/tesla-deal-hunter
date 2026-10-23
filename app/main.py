@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
 from .database import ROOT, Base, engine, Session, Vehicle, Listing, Price, Source, Activity, Setting, Hunt, now, migrate_legacy_database
 from .analysis import assess, ranking_key
-from .collectors import autohub, marketcheck, dallas
+from .collectors import autohub, marketcheck, dallas, tesla_used, cars_com, cargurus, carvana_search, truecar_search, scan_all_sources
+from .scoring import score_deal, compute_market_averages, check_hw4
 
 load_dotenv(ROOT/'.env')
 log=logging.getLogger('hunter'); log.setLevel(logging.INFO)
@@ -74,7 +75,15 @@ def ingest(source, rows, complete):
                 if listing.id not in seen:
                     listing.missing+=1
                     listing.status='NOT SEEN' if listing.missing<2 else 'REMOVED / AVAILABILITY UNKNOWN'
-        src=s.get(Source,source);src.observations+=len(rows);src.scans+=1;src.last_success=stamp;src.status='HEALTHY' if complete else 'DEGRADED';src.error='' if complete else 'Pagination capped; incomplete coverage'
+        src = s.get(Source, source)
+        if not src:
+            src = Source(name=source)
+            s.add(src)
+        src.observations += len(rows)
+        src.scans += 1
+        src.last_success = stamp
+        src.status = 'HEALTHY' if complete else 'DEGRADED'
+        src.error = '' if complete else 'Pagination capped; incomplete coverage'
         # Keep the UI activity buffer bounded; price history is retained.
         cutoff=s.scalar(select(Activity.id).order_by(Activity.id.desc()).offset(2000).limit(1))
         if cutoff: s.execute(delete(Activity).where(Activity.id<cutoff))
@@ -97,9 +106,14 @@ async def scan_source(name):
     activity('Starting '+name)
     with Session.begin() as s: s.get(Source,name).status='SCANNING'
     try:
-        if name=='Autohub Texas': rows,complete=await autohub(activity)
-        elif name=='Autos of Dallas': rows,complete=await dallas(activity)
-        else: rows,complete=await marketcheck(os.getenv('MARKETCHECK_API_KEY',''),pref,activity,reserve_api)
+        if name == 'Autohub Texas': rows, complete = await autohub(activity)
+        elif name == 'Autos of Dallas': rows, complete = await dallas(activity)
+        elif name == 'TrueCar': rows, complete = await truecar_search(pref, activity)
+        elif name == 'Carvana': rows, complete = await carvana_search(pref, activity)
+        elif name == 'Tesla.com': rows, complete = await tesla_used(pref, activity)
+        elif name == 'Cars.com': rows, complete = await cars_com(pref, activity)
+        elif name == 'CarGurus': rows, complete = await cargurus(pref, activity)
+        else: rows, complete = await marketcheck(os.getenv('MARKETCHECK_API_KEY', ''), pref, activity, reserve_api)
         ingest(name,rows,complete)
         scan_metrics[name]={'last_count':len(rows),'duration_seconds':round(time.time()-scan_started,2),'complete':complete}
         with Session.begin() as s:
@@ -269,25 +283,62 @@ async def security(request:Request,call_next):
     return response
 
 def vehicle_rows():
-    pref=settings(); result=[]
+    pref = settings()
+    result = []
     with Session() as s:
-        listings=list(s.scalars(select(Listing))); grouped={}
-        for l in listings:grouped.setdefault(l.vin,[]).append(l)
+        listings = list(s.scalars(select(Listing)))
+        grouped = {}
+        for l in listings:
+            grouped.setdefault(l.vin, []).append(l)
+
+        all_data = [l.data for l in listings if l.data]
+        market_comps = compute_market_averages(all_data)
+
         for v in s.scalars(select(Vehicle)):
-            records=grouped.get(v.vin,[])
-            if not records:continue
-            records.sort(key=lambda l:(l.source!='MarketCheck' or MARKETCHECK_ARCHIVE_ENABLED,l.last_seen),reverse=True)
-            active=[l for l in records if l.status=='ACTIVE']
-            chosen=(active or records)[0];d=dict(chosen.data)
-            analysis=assess(d,pref)
-            historical_only=all(l.source=='MarketCheck' for l in (active or records)) and not MARKETCHECK_ARCHIVE_ENABLED
-            if historical_only: analysis['risks'].append('Historical MarketCheck snapshot; availability and price are not refreshed')
-            prices={l.data.get('price') for l in active if l.data.get('price') is not None}
-            if len(prices)>1:
-                analysis['risks'].append('Conflicting advertised prices across sources')
-                if analysis['category']!='REJECTED':analysis['category']='MANUAL REVIEW'
-            result.append(dict(**d,**analysis,historical_only=historical_only,watched=v.watched,first_seen=v.first_seen,last_seen=v.last_seen,status=chosen.status,source_count=len(records),sources=[dict(name=l.source,url=l.url,observed=l.last_seen,status=l.status,price=l.data.get('price')) for l in records]))
-    return sorted(result,key=ranking_key)
+            records = grouped.get(v.vin, [])
+            if not records:
+                continue
+            records.sort(key=lambda l: (l.source != 'MarketCheck' or MARKETCHECK_ARCHIVE_ENABLED, l.last_seen), reverse=True)
+            active = [l for l in records if l.status == 'ACTIVE']
+            chosen = (active or records)[0]
+            d = dict(chosen.data)
+
+            analysis = assess(d, pref)
+            deal = score_deal(d, market_comps, pref)
+
+            historical_only = all(l.source == 'MarketCheck' for l in (active or records)) and not MARKETCHECK_ARCHIVE_ENABLED
+            risks = list(dict.fromkeys(deal.get('risks', []) + analysis.get('risks', [])))
+            if historical_only:
+                risks.append('Historical MarketCheck snapshot; availability and price are not refreshed')
+
+            prices = {l.data.get('price') for l in active if l.data.get('price') is not None}
+            if len(prices) > 1:
+                risks.append('Conflicting advertised prices across sources')
+                if analysis['category'] != 'REJECTED':
+                    analysis['category'] = 'MANUAL REVIEW'
+
+            item = dict(d)
+            item.update(analysis)
+            item['deal_score'] = deal['score']
+            item['category'] = deal['category'] if deal['category'] != 'OVERPRICED' else 'FAIR'
+            item['reasons'] = deal.get('reasons') or analysis.get('reasons', [])
+            item['risks'] = risks
+            item['hw4'] = deal.get('hw4') or analysis.get('hw4', 'UNKNOWN')
+            item['is_hw4'] = deal.get('is_hw4', False)
+            item['historical_only'] = historical_only
+            item['watched'] = v.watched
+            item['first_seen'] = v.first_seen
+            item['last_seen'] = v.last_seen
+            item['status'] = chosen.status
+            item['source_count'] = len(records)
+            item['source'] = chosen.source
+            item['url'] = chosen.url
+            item['sources'] = [
+                dict(name=l.source, url=l.url, observed=l.last_seen, status=l.status, price=l.data.get('price'))
+                for l in records
+            ]
+            result.append(item)
+    return sorted(result, key=ranking_key)
 
 @app.get('/api/state')
 def state():
@@ -360,6 +411,83 @@ def finish_hunt():
         result=h.summary
     activity('Overnight report finished; regular scanner schedule continues')
     return result
+
+
+async def perform_scan_all():
+    pref = settings()
+    activity("Starting concurrent scan across all sources...")
+    mk_key = os.getenv('MARKETCHECK_API_KEY', '') if MARKETCHECK_ARCHIVE_ENABLED else ''
+    results = await scan_all_sources(pref, activity, marketcheck_key=mk_key)
+    for name, (rows, complete) in results.items():
+        if rows:
+            ingest(name, rows, complete)
+            scan_metrics[name] = {'last_count': len(rows), 'complete': complete}
+            activity(f"{name}: ingested {len(rows)} vehicles")
+
+@app.post('/api/scan/{source_name}')
+async def trigger_scan(source_name: str):
+    asyncio.create_task(scan_source(source_name))
+    return {'status': f'Scan triggered for {source_name}'}
+
+@app.post('/api/scan-all')
+async def trigger_scan_all():
+    asyncio.create_task(perform_scan_all())
+    return {'status': 'Concurrent scan triggered across all sources'}
+
+class MarketCheckKeyUpdate(BaseModel):
+    api_key: str
+
+@app.get('/api/marketcheck-key')
+def get_marketcheck_key():
+    key = os.getenv('MARKETCHECK_API_KEY', '')
+    return {
+        'configured': bool(key),
+        'masked': f"{key[:4]}...{key[-4:]}" if len(key) > 8 else ('set' if key else '')
+    }
+
+@app.post('/api/marketcheck-key')
+async def set_marketcheck_key(body: MarketCheckKeyUpdate):
+    global MARKETCHECK_ARCHIVE_ENABLED
+    key = body.api_key.strip()
+    os.environ['MARKETCHECK_API_KEY'] = key
+    MARKETCHECK_ARCHIVE_ENABLED = True
+    env_path = ROOT / '.env'
+    lines = []
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+    new_lines = [l for l in lines if not l.startswith('MARKETCHECK_API_KEY=')]
+    new_lines.append(f"MARKETCHECK_API_KEY={key}")
+    new_lines = [l for l in new_lines if not l.startswith('MARKETCHECK_RETENTION_AUTHORIZED=')]
+    new_lines.append("MARKETCHECK_RETENTION_AUTHORIZED=true")
+    env_path.write_text('\n'.join(new_lines) + '\n')
+    activity(f"MarketCheck API key updated ({key[:4]}...{key[-4:] if len(key)>8 else ''})")
+    asyncio.create_task(scan_source('MarketCheck'))
+    return {'status': 'Key saved and MarketCheck scan triggered'}
+
+@app.get('/eval')
+@app.get('/deals.md')
+def eval_markdown():
+    from fastapi.responses import PlainTextResponse
+    rows = vehicle_rows()
+    pref = settings()
+    max_p = pref.get('max_price', 33000)
+    filtered = [
+        r for r in rows
+        if r.get('price') and r.get('price') <= max_p
+        and (r.get('year', 0) >= 2024 or r.get('is_hw4'))
+        and r.get('category') != 'TRASH VIN'
+    ]
+    md = [f"# Tesla Deal Hunter Feed — {now()}", f"Found {len(filtered)} verified deals meeting criteria:\n"]
+    for v in filtered[:50]:
+        md.append(f"### {v.get('year')} Tesla {v.get('model')} {v.get('trim', '')}")
+        md.append(f"- **Price**: ${v.get('price'):,}")
+        p_miles = f"{v.get('mileage'):,} mi" if isinstance(v.get('mileage'), (int, float)) else "Unknown"
+        md.append(f"- **Mileage**: {p_miles}")
+        md.append(f"- **Deal Score**: {v.get('deal_score', 0)}/100 ({v.get('category')})")
+        md.append(f"- **Hardware**: {v.get('hw4')}")
+        md.append(f"- **Dealer**: {v.get('dealer')} ({v.get('distance', 'unverified')} mi)")
+        md.append(f"- **Link**: {v.get('url')}\n")
+    return PlainTextResponse('\n'.join(md))
 
 app.mount('/static' ,StaticFiles(directory=ROOT/'app/static'),name='static')
 @app.get('/')
