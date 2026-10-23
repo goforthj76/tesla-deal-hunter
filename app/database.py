@@ -94,3 +94,25 @@ def migrate_legacy_database():
         if 'created' in columns and 'at' not in columns:
             with engine.begin() as conn:
                 conn.exec_driver_sql('ALTER TABLE activity RENAME COLUMN created TO at')
+
+
+class Evidence(Base):
+    __tablename__ = 'evidence'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vin: Mapped[str] = mapped_column(String(17), index=True)
+    field: Mapped[str] = mapped_column(String)
+    value: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String)
+    source: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text, default='')
+    observed: Mapped[str] = mapped_column(String, default=now)
+    retracted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+class Observation(Base):
+    __tablename__ = 'observations'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vin: Mapped[str] = mapped_column(String(17), index=True)
+    source: Mapped[str] = mapped_column(String)
+    url: Mapped[str] = mapped_column(Text)
+    observed: Mapped[str] = mapped_column(String, default=now)
+    data: Mapped[dict] = mapped_column(JSON)

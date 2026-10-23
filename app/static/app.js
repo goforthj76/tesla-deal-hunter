@@ -56,7 +56,7 @@ function render() {
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', '⚡ HW4 / 2024+', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', '🗑️ Trash VINs', 'STARRED'];
+  const categories = ['ALL', '⚡ HW4 / 2024+', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', 'MANUAL REVIEW', '🗑️ Trash VINs', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;
@@ -116,7 +116,7 @@ function renderVehicles() {
   });
 
   list.sort((a, b) => {
-    if (sort === 'score') return (b.deal_score || 0) - (a.deal_score || 0);
+    if (sort === 'score') return Number(a.investigation?.purchase_readiness === 'HOLD') - Number(b.investigation?.purchase_readiness === 'HOLD') || (b.deal_score || 0) - (a.deal_score || 0);
     if (sort === 'price') return (a.price || 999999) - (b.price || 999999);
     if (sort === 'mileage') return (a.mileage || 999999) - (b.mileage || 999999);
     if (sort === 'newest') return new Date(b.first_seen) - new Date(a.first_seen);
@@ -159,6 +159,8 @@ function renderVehicles() {
           <p class="car-meta">${v.trim || 'Standard Range'}</p>
           <p class="car-meta">🛣️ ${v.mileage ? v.mileage.toLocaleString() + ' mi' : 'Unknown miles'} · 📍 ${v.distance ? v.distance + ' mi away' : 'Distance unverified'}</p>
           <div class="car-tags">
+            ${v.investigation?.purchase_readiness === 'HOLD' ? '<span class="tag" style="background:#5c1d1d; color:#ffa198; font-weight:700;">🚨 HOLD</span>' : ''}
+            ${(v.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? '<span class="tag" style="background:#1f4b2b; color:#7ee787; font-weight:700;">🎯 Potential Long Range</span>' : ''}
             <span class="tag">${v.category}</span>
             <span class="tag">${v.hw4 || 'Hardware info'}</span>
             <span class="tag">${v.dealer || 'Dealer'}</span>
@@ -220,7 +222,10 @@ async function showDetail(vin) {
     <h4>Observed Price History</h4>
     <div id="modal-price-history" style="color: var(--muted); font-size: 0.85rem;">Loading price history...</div>
 
-    <div style="margin-top: 20px; display: flex; gap: 10px;">
+    <div style="margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap;">
+      <a href="/investigator?vin=${v.vin}" target="_blank" class="action-btn" style="background:#238636; color:#fff; text-decoration:none; display:inline-flex; align-items:center; padding:10px 14px; border-radius:6px; font-weight:600;">
+        🔍 Open in VIN Investigator ↗
+      </a>
       <a href="${v.url}" target="_blank" rel="noopener noreferrer" class="primary-btn" style="text-align: center; text-decoration: none; display: block; flex: 1;">
         Visit Original Listing →
       </a>

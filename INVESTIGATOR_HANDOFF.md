@@ -1,0 +1,7 @@
+# VIN Investigator integration
+Base: f74721b. Preserve Antigravity UI; additive link opens /investigator.
+Implemented: per-VIN user evidence with retraction audit, dated listing change snapshots, cross-source claim disagreements, generic vs LR opportunity flag, location/history holds, manual exact-VIN search links, inspection checklist, softer HW4 inference labels. Score sort moves holds down. 37 tests pass.
+Run Base.metadata.create_all through normal startup to add tables; back up live database before deployment. No production DB or .env included. Do not replace live data. Compare current branch before merging these files.
+Not implemented: automatic exact-VIN web enrichment, authoritative title clearance, attached photo authentication, geocoding/store verification, comparable price inference, automatic notifications, or integration of separate expanded-search ZIP. This is not a full implementation of the pasted brief.
+Claims are user recorded, not authenticated. Location text differences may flag same-store formatting or historic moves and require review. Historical observations may repeat; time ordering matters. Existing scoring keyword/dealer history heuristics still need refinement. New page tested via API/JS syntax, not phone/browser visual QA. No live deployment completed.
+Next: connect exact-VIN enrichment to shared capped Tavily budget, collect store addresses with provenance, and test negatives/generic disclaimers before automated risk rejection. Preserve existing known-case tests as reports, not independently verified facts.

@@ -15,8 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
-from .database import ROOT, Base, engine, Session, Vehicle, Listing, Price, Source, Activity, Setting, Hunt, now, migrate_legacy_database
-from .analysis import assess, ranking_key
+from .database import ROOT, Base, engine, Session, Vehicle, Listing, Price, Source, Activity, Setting, Hunt, Evidence, Observation, now, migrate_legacy_database
+from .analysis import assess, ranking_key, normalize_vin
+from .investigator import investigate, FIELDS, KINDS
 from .collectors import autohub, marketcheck, dallas, tesla_used, cars_com, cargurus, carvana_search, truecar_search, scan_all_sources
 from .scoring import score_deal, compute_market_averages, check_hw4
 
@@ -61,10 +62,16 @@ def ingest(source, rows, complete):
                 vehicle=Vehicle(vin=vin,first_seen=stamp,last_seen=stamp);s.add(vehicle)
                 s.add(Activity(message='New VIN: '+vin))
             vehicle.last_seen=stamp
-            listing=s.get(Listing,key)
-            old=listing.data.get('price') if listing else None
+            listing = s.get(Listing, key)
+            old = listing.data.get('price') if listing else None
+            changed = listing is None or listing.data != d
+            if listing and changed:
+                s.add(Observation(vin=vin, source=source, url=listing.url, data=dict(listing.data), observed=listing.last_seen))
             if not listing:
-                listing=Listing(id=key,vin=vin,source=source,url=d['url'],data=d,first_seen=stamp,last_seen=stamp);s.add(listing)
+                listing = Listing(id=key, vin=vin, source=source, url=d['url'], data=d, first_seen=stamp, last_seen=stamp)
+                s.add(listing)
+            if changed:
+                s.add(Observation(vin=vin, source=source, url=d['url'], data=dict(d), observed=stamp))
             listing.data=d; listing.last_seen=stamp;listing.missing=0;listing.status='ACTIVE'
             if d.get('price') is not None and old!=d['price']:
                 s.add(Price(listing_id=key,vin=vin,amount=d['price'],observed=stamp))
@@ -286,6 +293,9 @@ def vehicle_rows():
     result = []
     with Session() as s:
         listings = list(s.scalars(select(Listing)))
+        evidence_by_vin = {}
+        for e in s.scalars(select(Evidence).where(Evidence.retracted == False)):
+            evidence_by_vin.setdefault(e.vin, []).append(dict(field=e.field, value=e.value, kind=e.kind, source=e.source, url=e.url, observed=e.observed))
         grouped = {}
         for l in listings:
             grouped.setdefault(l.vin, []).append(l)
@@ -336,6 +346,11 @@ def vehicle_rows():
                 dict(name=l.source, url=l.url, observed=l.last_seen, status=l.status, price=l.data.get('price'))
                 for l in records
             ]
+            findings = investigate([dict(source=l.source, url=l.url, observed=l.last_seen, data=l.data) for l in records], evidence_by_vin.get(v.vin, []), pref)
+            item['investigation'] = findings
+            item['risks'] = list(dict.fromkeys(item['risks'] + findings['warnings']))
+            if findings['purchase_readiness'] == 'HOLD':
+                item['category'] = 'MANUAL REVIEW'
             result.append(item)
     return sorted(result, key=ranking_key)
 
@@ -491,3 +506,57 @@ def eval_markdown():
 app.mount('/static' ,StaticFiles(directory=ROOT/'app/static'),name='static')
 @app.get('/')
 def home():return FileResponse(ROOT/'app/static/index.html')
+
+class EvidenceInput(BaseModel):
+    field: str
+    value: str = Field(min_length=1, max_length=2000)
+    kind: str
+    source: str = Field(min_length=1, max_length=500)
+    url: str = Field(default='', max_length=2000)
+
+@app.get('/investigator')
+def investigator_page():
+    return FileResponse(ROOT / 'app/static/investigator.html')
+
+@app.get('/api/investigate/{vin}')
+def investigate_vin(vin: str):
+    try:
+        vin = normalize_vin(vin)
+    except ValueError:
+        raise HTTPException(422, 'VIN format/checksum invalid')
+    with Session() as session:
+        records = list(session.scalars(select(Listing).where(Listing.vin == vin)))
+        snapshots = list(session.scalars(select(Observation).where(Observation.vin == vin).order_by(Observation.id)))
+        observations = [dict(source=x.source, url=x.url, observed=x.observed, data=x.data) for x in snapshots]
+        observations += [dict(source=x.source, url=x.url, observed=x.last_seen, data=x.data) for x in records]
+        claims = [
+            dict(id=x.id, field=x.field, value=x.value, kind=x.kind, source=x.source, url=x.url, observed=x.observed)
+            for x in session.scalars(select(Evidence).where(Evidence.vin == vin, Evidence.retracted == False).order_by(Evidence.id))
+        ]
+    return dict(vin=vin, observations=observations, **investigate(observations, claims, settings()))
+
+@app.post('/api/investigate/{vin}/evidence')
+def add_evidence(vin: str, p: EvidenceInput):
+    try:
+        vin = normalize_vin(vin)
+    except ValueError:
+        raise HTTPException(422, 'VIN format/checksum invalid')
+    if p.field not in FIELDS or p.kind not in KINDS:
+        raise HTTPException(422, 'Unsupported evidence field or kind')
+    if p.url and not canonical_discovery_url(p.url):
+        raise HTTPException(422, 'Invalid evidence URL')
+    with Session.begin() as session:
+        e = Evidence(vin=vin, **p.model_dump())
+        session.add(e)
+        session.flush()
+        identifier = e.id
+    return {'id': identifier, 'status': 'Recorded as user-supplied evidence, not independently authenticated'}
+
+@app.post('/api/investigate/{vin}/evidence/{identifier}/retract')
+def retract_evidence(vin: str, identifier: int):
+    with Session.begin() as session:
+        e = session.get(Evidence, identifier)
+        if not e or e.vin != vin:
+            raise HTTPException(404)
+        e.retracted = True
+    return {'status': 'Retracted; audit record preserved'}
