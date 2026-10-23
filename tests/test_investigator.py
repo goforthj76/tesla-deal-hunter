@@ -29,7 +29,8 @@ def test_evidence_api_roundtrip(database,monkeypatch):
     from app import main
     from fastapi.testclient import TestClient
     monkeypatch.setattr(main,'settings',lambda:main.Preferences().model_dump())
-    c=TestClient(main.app);vin='5YJ3E1EA4RF862917'
+    monkeypatch.setenv('TDH_PASSWORD','fixture-password')
+    c=TestClient(main.app,headers={'Authorization':'Basic '+__import__('base64').b64encode(b'hunter:fixture-password').decode()});vin='5YJ3E1EA4RF862917'
     r=c.post('/api/investigate/'+vin+'/evidence',json={'field':'trim','value':'Long Range','kind':'physical_inspection','source':'test inspection'})
     assert r.status_code==200
     identifier=r.json()['id']
@@ -45,3 +46,10 @@ def test_populated_inventory_investigation(database,monkeypatch):
     main.ingest('test',[record()],False)
     rows=main.vehicle_rows()
     assert len(rows)==1 and 'investigation' in rows[0]
+
+def test_negated_and_generic_history_not_positive_proof():
+ from app.investigator import adverse_claim
+ assert not adverse_claim('No salvage or structural damage reported')
+ assert not adverse_claim('Some vehicles may have a total loss')
+ assert adverse_claim('Clean title. With a total loss on CARFAX')
+ assert adverse_claim('No salvage title, but insurance total loss')

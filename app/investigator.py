@@ -6,6 +6,16 @@ from .analysis import distance
 FIELDS={'trim','drivetrain','year','mileage','price','location','hw4','fsd','history','availability'}
 KINDS={'seller','aggregator','user_report','physical_inspection','history_report'}
 
+def adverse_claim(value):
+    # Evaluate clauses so 'no salvage, but total loss' retains the actual warning.
+    clauses=re.split(r'[.;\n]|\bbut\b',str(value).lower())
+    for clause in clauses:
+        if not re.search(r'\b(total loss|salvage|rebuilt|structural damage|flood)\b',clause):continue
+        if re.search(r'\b(no|not|never|without)\b',clause):continue
+        if re.search(r'\b(some vehicles|may have|might have|could have)\b',clause):continue
+        return True
+    return False
+
 def investigate(observations, claims, preferences):
     facts=[]
     for o in observations:
@@ -30,12 +40,12 @@ def investigate(observations, claims, preferences):
         opportunities.append('POSSIBLE MISIDENTIFIED LONG RANGE: conflicting trim evidence; verify Software screen and drivetrain')
     elif any(re.search(r'\b(base|standard|unknown)\b',c['value'],re.I) for c in trims):
         opportunities.append('Trim verification task: generic trim alone is not evidence of Long Range')
-    history=[c for c in by['history'] if re.search(r'\b(total loss|salvage|rebuilt|structural damage|flood)\b',c['value'],re.I)]
+    history=[c for c in by['history'] if adverse_claim(c['value'])]
     if history:warnings.append('Adverse history evidence recorded; excluded pending resolution')
     for o in observations:
         text=o['data'].get('description','')
         # Positive disclosure only; generic keyword hits remain review tasks, not facts.
-        if re.search(r'(?:with a total loss|salvage title|rebuilt title|insurance total loss)',text,re.I):
+        if adverse_claim(text):
             warnings.append('Seller text contains adverse-history wording; review whether VIN-specific')
     geographic_conflict=any(c['field']=='location' for c in conflicts)
     if geographic_conflict:warnings.append('Conflicting location claims; do not plan a visit until physical store is verified')

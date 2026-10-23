@@ -189,7 +189,8 @@ def test_unified_endpoints_without_network(database,monkeypatch):
     from fastapi.testclient import TestClient
     from app.database import Setting
     monkeypatch.setattr(main,'settings',lambda:main.Preferences().model_dump())
-    client=TestClient(main.app)
+    monkeypatch.setenv('TDH_PASSWORD','fixture-password')
+    client=TestClient(main.app,headers={'Authorization':'Basic '+__import__('base64').b64encode(b'hunter:fixture-password').decode()})
     assert client.get('/').status_code==200
     assert client.get('/api/state').status_code==200
     seeds=client.get('/api/research-seeds').json()
