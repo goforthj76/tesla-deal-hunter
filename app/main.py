@@ -1,3 +1,4 @@
+from .vin_queue import sync_jobs, next_job, snippet_claims, summary as queue_summary, RETRY_SECONDS
 import asyncio
 import math
 from datetime import datetime, timezone, timedelta
@@ -241,15 +242,17 @@ def discover():
         if not data['remaining']: return {'status':'local monthly cap reached'}
         plan=plans();leads={x['url']:x for x in data['leads'] if relevant(x) or x.get('vin')}
         with Session() as session:
-            candidates=[dict(l.data,vin=l.vin) for l in session.scalars(select(Listing).where(Listing.status=='ACTIVE'))]
-        attempts=dict(data.get('vin_attempts',{}))
+            all_vins=list(session.scalars(select(Vehicle.vin)))
+        jobs=sync_jobs(data.get('vin_jobs',{}),all_vins)
+        data['vin_jobs']=jobs
         data.update(next_scan=time.time()+INTERVAL,status='SEARCHING')
         new_count=0;result_count=0;filtered=0;errors=[];completed=0
         for _ in range(min(BATCH,data['remaining'])):
-            vin=choose_vin_task(candidates,attempts,time.time(),settings()['max_price']) if data['cursor']%4==3 else None
+            vin=next_job(jobs,time.time()) if data['cursor']%4!=0 else None
             item={'query':'"'+vin+'" Tesla history auction salvage dealer location','label':'VIN '+vin,'domains':[]} if vin else plan[(data['cursor']-data['cursor']//4)%len(plan)]
             if vin:
-                attempts[vin]=time.time();data['vin_attempts']=attempts
+                jobs[vin]=dict(jobs[vin],status='SEARCHING',attempts=jobs[vin].get('attempts',0)+1,retry_after=time.time()+RETRY_SECONDS,last_attempt=now(),error='')
+                data['vin_jobs']=jobs
             data.update(reserved_calls=data.get('reserved_calls',0)+1,cursor=data['cursor']+1,last_query=item['query'])
             save_discovery(data) # Each request reserved before I/O, including errors.
             try:
@@ -263,15 +266,22 @@ def discover():
                 runs=list(data.get('query_runs',[]))
                 runs.append({'query':item['query'],'label':item['label'],'at':now(),'results':len(payload['results']),'vin':vin})
                 data['query_runs']=runs[-120:]
+                vin_leads=[];vin_claims=[]
                 for result in payload['results']:
                     url=canonical_discovery_url(result.get('url',''))
                     if not url or not (vin_result_matches(result,vin) if vin else relevant(result)):filtered+=1;continue
+                    if vin:
+                        vin_leads.append(dict(url=url,title=str(result.get('title',''))[:300],snippet=str(result.get('content',''))[:1600]))
+                        vin_claims.extend(snippet_claims(vin,dict(result,url=url),now()))
                     prior=leads.get(url);new_count+=int(prior is None)
                     leads[url]={'url':url,'title':str(result.get('title',''))[:300],'snippet':str(result.get('content',''))[:1200],'first_seen':prior['first_seen'] if prior else now(),'last_seen':now(),'town_query':item['label'],'vin':vin,'status':'UNVERIFIED LEAD — distance, availability and VIN need review'}
+                if vin:
+                    jobs[vin].update(status='SEARCHED' if vin_leads else 'NO_EXACT_RESULTS',last_success=time.time(),retry_after=0,leads=vin_leads,claims=vin_claims)
                 data.update(leads=sorted(leads.values(),key=lambda x:x['last_seen'],reverse=True)[:2000])
                 save_discovery(data)
             except Exception as exc:
                 errors.append(str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
+                if vin:jobs[vin].update(status='ERROR',error=errors[-1],retry_after=time.time()+RETRY_SECONDS)
                 if getattr(locals().get('response'),'status_code',None) in [401,429,432,433]:break
         data.update(status='HEALTHY' if not errors else 'DEGRADED' if completed else 'UNAVAILABLE',last_new_urls=new_count,last_results=result_count,last_filtered=filtered,last_queries=completed,error='; '.join(errors)[:200])
         if completed:data['last_success']=now()
@@ -354,6 +364,7 @@ async def security(request:Request,call_next):
 def vehicle_rows():
     pref = settings()
     result = []
+    research_jobs=discovery_state().get('vin_jobs',{})
     with Session() as s:
         listings = list(s.scalars(select(Listing)))
         evidence_by_vin = {}
@@ -409,7 +420,7 @@ def vehicle_rows():
                 dict(name=l.source, url=l.url, observed=l.last_seen, status=l.status, price=l.data.get('price'))
                 for l in records
             ]
-            findings=investigate([dict(source=l.source,url=l.url,observed=l.last_seen,data=l.data) for l in records], evidence_by_vin.get(v.vin,[]), pref)
+            findings=investigate([dict(source=l.source,url=l.url,observed=l.last_seen,data=l.data) for l in records], evidence_by_vin.get(v.vin,[])+research_jobs.get(v.vin,{}).get('claims',[]), pref)
             item['investigation']=findings
             item['risks']=list(dict.fromkeys(item['risks']+findings['warnings']))
             if findings['purchase_readiness']=='HOLD' and item['category']!='REJECTED':
@@ -597,7 +608,8 @@ def investigate_vin(vin:str):
         observations=[dict(source=x.source,url=x.url,observed=x.observed,data=x.data) for x in snapshots]
         observations += [dict(source=x.source,url=x.url,observed=x.last_seen,data=x.data) for x in records]
         claims=[dict(id=x.id,field=x.field,value=x.value,kind=x.kind,source=x.source,url=x.url,observed=x.observed) for x in session.scalars(select(Evidence).where(Evidence.vin==vin,Evidence.retracted==False).order_by(Evidence.id))]
-    return dict(vin=vin,observations=observations,research_leads=[x for x in discovery_state()['leads'] if x.get('vin')==vin],**investigate(observations,claims,settings()))
+    job=discovery_state().get('vin_jobs',{}).get(vin,{'status':'PENDING','claims':[],'leads':[]})
+    return dict(vin=vin,observations=observations,automatic_research=job,research_leads=job.get('leads',[]),**investigate(observations,claims+job.get('claims',[]),settings()))
 
 @app.post('/api/investigate/{vin}/evidence')
 def add_evidence(vin:str,p:EvidenceInput):
@@ -622,3 +634,10 @@ def retract_evidence(vin:str,identifier:int):
 @app.get('/investigator')
 def investigator_page():
     return FileResponse(ROOT/'app/static/investigator.html')
+
+@app.get('/api/vin-queue')
+def vin_queue_status():
+    data=discovery_state()
+    with Session() as session:vins=list(session.scalars(select(Vehicle.vin)))
+    jobs=sync_jobs(data.get('vin_jobs',{}),vins)
+    return dict(**queue_summary(jobs,time.time()),configured=data['configured'],remaining_search_calls=data['remaining'],next_cycle=data['next_scan'],vin_searches_per_cycle=3,cycle_hours=INTERVAL/3600,monthly_cap=CAP,jobs=jobs,notice='Every valid tracked VIN is queued. Search snippets are unverified leads. No results does not mean clean history. Search completion is limited by credits and source coverage.')
