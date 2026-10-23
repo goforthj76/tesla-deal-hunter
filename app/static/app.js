@@ -79,12 +79,13 @@ function render() {
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', '💎 Hidden Gems', '🚀 Hidden Performance', '⚡ Hidden AWD / LR', '🧠 Paid FSD Included', '🎯 Best Bang for Buck', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', '🗑️ Trash VINs', 'STARRED'];
+  const categories = ['ALL', '✨ 2024 Only', '💎 Hidden Gems', '🚀 Hidden Performance', '⚡ Hidden AWD / LR', '🧠 Paid FSD Included', '🎯 Best Bang for Buck', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', '🗑️ Trash VINs', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;
       if (c === 'ALL') count = state.vehicles.filter((v) => v.category !== 'TRASH VIN').length;
       else if (c === 'STARRED') count = state.vehicles.filter((v) => v.watched).length;
+      else if (c === '✨ 2024 Only') count = state.vehicles.filter((v) => v.year === 2024).length;
       else if (c === '💎 Hidden Gems') count = state.vehicles.filter(isHiddenGem).length;
       else if (c === '🚀 Hidden Performance') count = state.vehicles.filter(v => hasOpportunity(v, 'PERFORMANCE')).length;
       else if (c === '⚡ Hidden AWD / LR') count = state.vehicles.filter(v => hasOpportunity(v, 'AWD') || hasOpportunity(v, 'DUAL MOTOR') || hasOpportunity(v, 'LONG RANGE') || hasOpportunity(v, 'MISIDENTIFIED')).length;
@@ -134,6 +135,9 @@ function renderVehicles() {
     if (currentFilter === 'STARRED') return v.watched;
     if (currentFilter === '🗑️ Trash VINs') return v.category === 'TRASH VIN';
     if (v.category === 'TRASH VIN') return false;
+    if (currentFilter === '✨ 2024 Only') {
+      return v.year === 2024;
+    }
     if (currentFilter === '💎 Hidden Gems') {
       return isHiddenGem(v);
     }
