@@ -488,8 +488,14 @@ def vehicle_rows():
             findings=investigate([dict(source=l.source,url=l.url,observed=l.last_seen,data=l.data) for l in records], evidence_by_vin.get(v.vin,[])+research_jobs.get(v.vin,{}).get('claims',[]), pref)
             item['investigation']=findings
             item['risks']=list(dict.fromkeys(item['risks']+findings['warnings']))
-            if findings['purchase_readiness']=='HOLD' and item['category']!='REJECTED':
-                item['category']='MANUAL REVIEW'
+            if findings['purchase_readiness'] == 'HOLD':
+                is_salvage = any('autosavvy' in w.lower() or 'adverse history' in w.lower() or 'salvage' in w.lower() or 'rebuilt' in w.lower() for w in findings['warnings'])
+                if is_salvage:
+                    item['category'] = 'HOLD / REBUILT TITLE'
+                    item['deal_score'] = min(item.get('deal_score', 0), 20)
+                    item['preference_score'] = min(item.get('preference_score', 0), 20)
+                elif item['category'] != 'REJECTED':
+                    item['category'] = 'MANUAL REVIEW'
             result.append(item)
     return sorted(result, key=ranking_key)
 

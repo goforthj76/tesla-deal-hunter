@@ -10,9 +10,10 @@ const money = (n) =>
 function bangForBuck(v) {
   const price = v.price || 0;
   if (price <= 0 || price > 36000) return 0;
-  if (v.category === 'TRASH VIN') return 0;
+  if (v.category === 'TRASH VIN' || v.category === 'HOLD / REBUILT TITLE') return 0;
   if (v.investigation?.purchase_readiness === 'HOLD') return 0;
   const score = v.deal_score || 50;
+  if (score < 60) return 0;
   const year = v.year || 2021;
   if (year < 2022) return 0;
   const mileage = v.mileage != null ? v.mileage : 60000;
@@ -22,10 +23,13 @@ function bangForBuck(v) {
 }
 
 function hasOpportunity(v, keyword) {
+  if (v.investigation?.purchase_readiness === 'HOLD' && keyword !== 'FSD') return false;
   return (v.investigation?.opportunities || []).some(o => o.toUpperCase().includes(keyword.toUpperCase()));
 }
 
 function isHiddenGem(v) {
+  if (v.investigation?.purchase_readiness === 'HOLD') return false;
+  if (v.category === 'HOLD / REBUILT TITLE' || v.category === 'TRASH VIN') return false;
   const opps = v.investigation?.opportunities || [];
   return opps.some(o => o.includes('PERFORMANCE') || o.includes('LONG RANGE') || o.includes('MISIDENTIFIED') || o.includes('AWD') || o.includes('DUAL MOTOR') || o.includes('FSD')) || (v.fsd && v.fsd.includes('PAID'));
 }

@@ -71,5 +71,5 @@ def assess(d, settings):
 def ranking_key(vehicle):
     """Known unsuitable/unavailable records never outrank active candidates."""
     status=vehicle.get('status','ACTIVE')
-    tier=4 if status!='ACTIVE' else 3 if vehicle.get('historical_only') else {'WATCH':0,'MANUAL REVIEW':1,'REJECTED':2}.get(vehicle.get('category'),1)
+    tier=4 if status!='ACTIVE' else 3 if vehicle.get('historical_only') else {'WATCH':0,'MANUAL REVIEW':1,'REJECTED':2,'HOLD / REBUILT TITLE':2}.get(vehicle.get('category'),1)
     return (tier,-vehicle.get('preference_score',0),-(vehicle.get('year') or 0),vehicle.get('mileage') if vehicle.get('mileage') is not None else float('inf'),vehicle.get('vin',''))

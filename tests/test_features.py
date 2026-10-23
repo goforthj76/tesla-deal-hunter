@@ -85,3 +85,49 @@ def test_hw4_notification_criteria():
     is_hw4, tag = check_hw4({'year': 2023, 'model': 'Model 3', 'description': 'Equipped with HW4 Autopilot hardware'})
     assert is_hw4
 
+
+
+def test_autosavvy_branded_title_disqualification():
+    from app.investigator import investigate
+    p = {'latitude': 33.0146, 'longitude': -97.0969, 'radius': 50}
+    obs = [{'source': 'MarketCheck', 'url': 'https://autosavvy.com/car', 'observed': '2026-10-22T01:00:00+00:00', 'data': {'vin': '7SAYGDEF1RA285373', 'dealer': 'Autosavvy Duncanville', 'price': 34800, 'trim': 'Performance'}}]
+    res = investigate(obs, [], p)
+    assert res['purchase_readiness'] == 'HOLD'
+    assert any('AutoSavvy' in w for w in res['warnings'])
+    assert not any('PERFORMANCE' in o for o in res['opportunities'])
+
+def test_auction_salvage_disqualification():
+    from app.investigator import investigate
+    p = {'latitude': 33.0146, 'longitude': -97.0969, 'radius': 50}
+    obs = [{'source': 'Dealer', 'url': 'https://example.com/car', 'observed': '2026-10-22T01:00:00+00:00', 'data': {'vin': '5YJ3E1EA1RF752665', 'dealer': 'Rideline', 'price': 29997, 'trim': 'Base'}}]
+    claims = [{'field': 'history', 'value': 'Auction salvage/damage record detected: https://vehileaks.com/vehicle/2024-Tesla-Model-3-Standard-Range-5YJ3E1EA1RF752665', 'kind': 'history_report'}]
+    res = investigate(obs, claims, p)
+    assert res['purchase_readiness'] == 'HOLD'
+    assert any('Adverse history' in w for w in res['warnings'])
+    assert not any('MISIDENTIFIED' in o for o in res['opportunities'])
+
+def test_vin_single_motor_trim_conflict():
+    from app.investigator import investigate
+    p = {'latitude': 33.0146, 'longitude': -97.0969, 'radius': 50}
+    # 5YJ3E1EA4RF871911 has 8th char A (Single Motor RWD)
+    obs = [{'source': 'Dealer', 'url': 'https://example.com/car', 'observed': '2026-10-22T01:00:00+00:00', 'data': {'vin': '5YJ3E1EA4RF871911', 'dealer': 'CarMax', 'price': 35998, 'trim': 'Base'}}]
+    claims = [{'field': 'trim', 'value': 'Performance', 'kind': 'aggregator', 'source': 'Web snippet'}]
+    res = investigate(obs, claims, p)
+    assert any('CONFIGURATION CONFLICT' in w for w in res['warnings'])
+    assert not any('Factory VIN motor code (A) indicates Performance' in o for o in res['opportunities'])
+
+def test_highland_lr_awd_confirmation():
+    from app.investigator import investigate
+    p = {'latitude': 33.0146, 'longitude': -97.0969, 'radius': 50}
+    # 5YJ3E1EB4RF833863 has 8th char B (Dual Motor Long Range AWD)
+    obs = [{'source': 'Dealer', 'url': 'https://example.com/car', 'observed': '2026-10-22T01:00:00+00:00', 'data': {'vin': '5YJ3E1EB4RF833863', 'dealer': 'Rideline', 'price': 29997, 'trim': 'Base', 'drivetrain': 'RWD'}}]
+    res = investigate(obs, [], p)
+    assert any('POSSIBLE MISIDENTIFIED LONG RANGE' in o and 'motor code (B)' in o for o in res['opportunities'])
+
+def test_model_y_motor_d_is_rwd():
+    from app.investigator import decode_tesla_motor
+    # 7SAYGDED8RF026428 has 8th char D
+    info = decode_tesla_motor('7SAYGDED8RF026428')
+    assert info['drivetrain'] == 'RWD'
+    assert info['is_single'] is True
+    assert info['is_dual'] is False
