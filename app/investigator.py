@@ -51,8 +51,17 @@ def investigate(observations, claims, preferences):
             except ValueError:pass
         if len(values)>1 and max(values)-min(values)>tolerance:conflicts.append({'field':field,'values':values,'message':field.upper()+' VARIATION — may reflect elapsed time or pricing terms'})
     trims=by['trim']
-    if any(generic_trim(c['value']) for c in trims) and any('long range' in c['value'].lower() for c in trims):
+    drivetrains=by['drivetrain']
+    all_vins = {o.get('data', {}).get('vin') for o in observations if o.get('data', {}).get('vin')}
+    factory_dual_motor = any(isinstance(v, str) and len(v) == 17 and v[7] in ('B', 'C', 'D', 'E', 'F') for v in all_vins)
+    has_generic = any(generic_trim(c['value']) for c in trims) or any(str(c['value']).strip().lower() in ('rwd', 'rear wheel drive') for c in drivetrains)
+    has_long_range = any('long range' in str(c['value']).lower() or 'dual motor' in str(c['value']).lower() or 'awd' in str(c['value']).lower() for c in trims + drivetrains)
+    is_advertised_lr = any('long range' in str(c['value']).lower() or 'performance' in str(c['value']).lower() for c in trims)
+
+    if has_generic and has_long_range:
         opportunities.append('POSSIBLE MISIDENTIFIED LONG RANGE: conflicting trim evidence; verify Software screen and drivetrain')
+    elif has_generic and factory_dual_motor and not is_advertised_lr:
+        opportunities.append('POSSIBLE MISIDENTIFIED LONG RANGE: factory VIN motor code confirms Dual Motor AWD; advertised as generic Base/RWD')
     elif any(generic_trim(c['value']) for c in trims):
         opportunities.append('Trim verification task: generic trim alone is not evidence of Long Range')
     history=[c for c in by['history'] if adverse_claim(c['value'])]

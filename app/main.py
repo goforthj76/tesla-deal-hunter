@@ -300,8 +300,19 @@ def serper_research():
         used=data.get('serper_reserved',0)+int(os.getenv('SERPER_PREUSED_CALLS','0'))
         if used>=cap:return {'status':'CAP REACHED'}
         if data.get('serper_next',0)>clock:return {'status':'COOLDOWN'}
-        with Session() as session:vins=list(session.scalars(select(Vehicle.vin)))
-        jobs=sync_jobs(data.get('vin_jobs',{}),vins);data['vin_jobs']=jobs
+        with Session() as session:
+            vins=list(session.scalars(select(Vehicle.vin)))
+            candidate_vins=set()
+            for l in session.scalars(select(Listing).where(Listing.status=='ACTIVE')):
+                t=(l.data.get('trim') or '').lower()
+                dt=(l.data.get('drivetrain') or '').lower()
+                if any(w in t for w in ['base','standard','rwd']) or dt in ['rwd','rear wheel drive'] or not t:
+                    candidate_vins.add(l.vin)
+        jobs=sync_jobs(data.get('vin_jobs',{}),vins)
+        for v_key, job in jobs.items():
+            if v_key in candidate_vins:
+                job['priority']=0
+        data['vin_jobs']=jobs
         completed=0;started=time.time()
         data['serper_next']=clock+60
         for _ in range(min(10,cap-used)):
@@ -324,6 +335,8 @@ def serper_research():
                     result['url']=url
                     leads.append(dict(url=url,title=result['title'][:300],snippet=result['content'][:1600]))
                     claims.extend(snippet_claims(vin,result,now()))
+                    if any(m in url for m in ['/inventory', '/used', '/cars-for-sale', '/vehicle-details']):
+                        data.setdefault('leads', []).append({'url': url, 'title': result['title'][:300], 'snippet': result['content'][:1200], 'first_seen': now(), 'last_seen': now(), 'town_query': 'Serper VIN lead ' + vin, 'vin': vin, 'status': 'UNVERIFIED LEAD — dealer inventory page'})
                 job.update(status='SEARCHED' if leads else 'NO_EXACT_RESULTS',last_success=time.time(),retry_after=0,error='',leads=leads,claims=claims)
                 completed+=1
                 data['serper_status']='HEALTHY'

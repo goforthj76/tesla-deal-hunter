@@ -70,12 +70,13 @@ function render() {
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', '🎯 Best Bang for Buck', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', '🗑️ Trash VINs', 'STARRED'];
+  const categories = ['ALL', '💎 Misidentified LR', '🎯 Best Bang for Buck', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', '🗑️ Trash VINs', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;
       if (c === 'ALL') count = state.vehicles.filter((v) => v.category !== 'TRASH VIN').length;
       else if (c === 'STARRED') count = state.vehicles.filter((v) => v.watched).length;
+      else if (c === '💎 Misidentified LR') count = state.vehicles.filter((v) => (v.investigation?.opportunities || []).some((o) => o.includes('MISIDENTIFIED'))).length;
       else if (c === '🎯 Best Bang for Buck') count = state.vehicles.filter((v) => bangForBuck(v) >= 1.1).length;
       else if (c === '⚡ HW4 / 2024+') count = state.vehicles.filter((v) => v.category !== 'TRASH VIN' && ((v.year && v.year >= 2024) || (v.hw4 && v.hw4.includes('HW4')))).length;
       else if (c === '🗑️ Trash VINs') count = state.vehicles.filter((v) => v.category === 'TRASH VIN').length;
@@ -121,6 +122,9 @@ function renderVehicles() {
     if (currentFilter === 'STARRED') return v.watched;
     if (currentFilter === '🗑️ Trash VINs') return v.category === 'TRASH VIN';
     if (v.category === 'TRASH VIN') return false;
+    if (currentFilter === '💎 Misidentified LR') {
+      return (v.investigation?.opportunities || []).some((o) => o.includes('MISIDENTIFIED'));
+    }
     if (currentFilter === '🎯 Best Bang for Buck') {
       return bangForBuck(v) >= 1.1;
     }
@@ -134,6 +138,11 @@ function renderVehicles() {
   });
 
   list.sort((a, b) => {
+    if (sort === 'misidentified') {
+      const aM = (a.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? 1 : 0;
+      const bM = (b.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? 1 : 0;
+      return (bM - aM) || ((b.deal_score || 0) - (a.deal_score || 0));
+    }
     if (sort === 'bang') return bangForBuck(b) - bangForBuck(a);
     if (sort === 'score') return Number(a.investigation?.purchase_readiness === 'HOLD') - Number(b.investigation?.purchase_readiness === 'HOLD') || (b.deal_score || 0) - (a.deal_score || 0);
     if (sort === 'price') return (a.price || 999999) - (b.price || 999999);
@@ -180,7 +189,7 @@ function renderVehicles() {
           <div class="car-tags">
             ${v.investigation?.purchase_readiness === 'HOLD' ? '<span class="tag" style="background:#5c1d1d; color:#ffa198; font-weight:700;">🚨 HOLD</span>' : ''}
             ${bangForBuck(v) >= 1.1 ? '<span class="tag" style="background:#0f3822; color:#3fb950; font-weight:700; border:1px solid #238636;">🎯 Best Bang for Buck</span>' : ''}
-            ${(v.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? '<span class="tag" style="background:#1f4b2b; color:#7ee787; font-weight:700;">🎯 Potential Long Range</span>' : ''}
+            ${(v.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? '<span class="tag" style="background:#1f4b2b; color:#7ee787; font-weight:700; border:1px solid #2ea043;">💎 Misidentified Long Range</span>' : ''}
             <span class="tag">${v.category}</span>
             <span class="tag">${v.hw4 || 'Hardware info'}</span>
             <span class="tag">${v.dealer || 'Dealer'}</span>
@@ -358,7 +367,9 @@ window.addEventListener('DOMContentLoaded', () => {
   $('filters').addEventListener('click', (e) => {
     if (e.target.dataset.cat) {
       currentFilter = e.target.dataset.cat;
-      if (currentFilter === '🎯 Best Bang for Buck' && $('sort')) {
+      if (currentFilter === '💎 Misidentified LR' && $('sort')) {
+        $('sort').value = 'misidentified';
+      } else if (currentFilter === '🎯 Best Bang for Buck' && $('sort')) {
         $('sort').value = 'bang';
       }
       render();
