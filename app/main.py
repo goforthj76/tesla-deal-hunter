@@ -307,15 +307,6 @@ app=FastAPI(title='Tesla Deal Hunter',lifespan=lifespan)
 
 @app.middleware('http')
 async def security(request:Request,call_next):
-    import base64
-    password=os.getenv('TDH_PASSWORD','')
-    if password:
-        try:
-            value=base64.b64decode(request.headers.get('authorization','').split(' ',1)[1]).decode()
-            valid=secrets.compare_digest(value,'hunter:'+password)
-        except Exception:valid=False
-        if not valid:return JSONResponse({'detail':'Sign in as hunter'},401,headers={'WWW-Authenticate':'Basic realm="Tesla Deal Hunter"'})
-
     if request.method not in ['GET','HEAD','OPTIONS']:
         origin=request.headers.get('origin')
         if origin and origin!=str(request.base_url).rstrip('/'):
@@ -398,9 +389,17 @@ def state():
     with Session() as s:
         sources=[dict(name=x.name,status=x.status,error=x.error,last_success=x.last_success,next_scan=x.next_scan,scans=x.scans,observations=x.observations,api_calls=x.request_count) for x in s.scalars(select(Source))]
         events=[dict(at=x.at,message=x.message) for x in s.scalars(select(Activity).order_by(Activity.id.desc()).limit(80))]
+    scheduled={'Autohub Texas','Autos of Dallas','Discovered dealers','MarketCheck'}
     for source in sources:
+        source['automatically_scheduled']=source['name'] in scheduled and (source['name']!='MarketCheck' or MARKETCHECK_ARCHIVE_ENABLED)
+        source['freshness']='UNKNOWN'
+        if source['last_success']:
+            try:
+                age=(datetime.now(timezone.utc)-datetime.fromisoformat(source['last_success'])).total_seconds()
+                source['freshness']='RECENT' if age<86400 else 'STALE'
+            except ValueError:pass
         source.update(scan_metrics.get(source['name'],{}))
-    projected=sum(x.get('last_count',0)*3600/max(86400 if x['name']=='MarketCheck' else settings()['dealer_interval_minutes']*60, x['next_scan']-datetime.fromisoformat(x['last_success']).timestamp() if x['last_success'] else 86400) for x in sources if x['status'] not in ['DISABLED','NOT CONFIGURED','UNAVAILABLE'])
+    projected=sum(x.get('last_count',0)*3600/max(86400 if x['name']=='MarketCheck' else settings()['dealer_interval_minutes']*60, x['next_scan']-datetime.fromisoformat(x['last_success']).timestamp() if x['last_success'] else 86400) for x in sources if x['automatically_scheduled'] and x['freshness']=='RECENT' and x['status'] not in ['DISABLED','NOT CONFIGURED','UNAVAILABLE'])
     dealers=sorted({r.get('dealer') for r in rows if r.get('dealer')})
     with Session() as s:
         hunt=s.scalar(select(Hunt).order_by(Hunt.id.desc()).limit(1))
@@ -546,9 +545,6 @@ app.mount('/static' ,StaticFiles(directory=ROOT/'app/static'),name='static')
 @app.get('/')
 def home():return FileResponse(ROOT/'app/static/index.html')
 
-@app.get('/investigator')
-def investigator():return FileResponse(ROOT/'app/static/investigator.html')
-
 
 class EvidenceInput(BaseModel):
     field: str
@@ -587,3 +583,8 @@ def retract_evidence(vin:str,identifier:int):
         e.retracted=True
     return {'status':'Retracted; audit record preserved'}
 
+
+
+@app.get('/investigator')
+def investigator_page():
+    return FileResponse(ROOT/'app/static/investigator.html')
