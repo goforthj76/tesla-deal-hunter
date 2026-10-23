@@ -70,3 +70,8 @@ def test_invalid_feed_row_cannot_remove_previous_inventory(database):
  with database() as s:
   rows=list(s.scalars(select(Listing)))
   assert len(rows)==1 and rows[0].status=='ACTIVE'
+
+def test_actual_case_rwd_vs_reported_long_range():
+ d=investigate([obs('5YJ3E1EA4RF862917',trim='RWD')],[claim('trim','Long Range')],P)
+ assert any('MISIDENTIFIED' in x for x in d['opportunities'])
+ assert not any('MISIDENTIFIED' in x for x in investigate([obs('x',trim='Long Range RWD')],[],P)['opportunities'])

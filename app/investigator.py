@@ -16,6 +16,10 @@ def adverse_claim(value):
         return True
     return False
 
+def generic_trim(value):
+    text=str(value).strip().lower()
+    return text in {'base','standard','standard range','rwd','rear wheel drive','model 3','unknown'}
+
 def investigate(observations, claims, preferences):
     facts=[]
     for o in observations:
@@ -36,9 +40,9 @@ def investigate(observations, claims, preferences):
             except ValueError:pass
         if len(values)>1 and max(values)-min(values)>tolerance:conflicts.append({'field':field,'values':values,'message':field.upper()+' VARIATION — may reflect elapsed time or pricing terms'})
     trims=by['trim']
-    if any(re.search(r'\b(base|standard|unknown)\b',c['value'],re.I) for c in trims) and any('long range' in c['value'].lower() for c in trims):
+    if any(generic_trim(c['value']) for c in trims) and any('long range' in c['value'].lower() for c in trims):
         opportunities.append('POSSIBLE MISIDENTIFIED LONG RANGE: conflicting trim evidence; verify Software screen and drivetrain')
-    elif any(re.search(r'\b(base|standard|unknown)\b',c['value'],re.I) for c in trims):
+    elif any(generic_trim(c['value']) for c in trims):
         opportunities.append('Trim verification task: generic trim alone is not evidence of Long Range')
     history=[c for c in by['history'] if adverse_claim(c['value'])]
     if history:warnings.append('Adverse history evidence recorded; excluded pending resolution')
