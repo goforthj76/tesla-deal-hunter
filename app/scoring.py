@@ -61,11 +61,11 @@ def check_hw4(listing: dict) -> tuple[bool, str]:
 
     # 1. Any 2024+ Tesla is 100% HW4
     if year >= 2024:
-        return True, "HW4 CONFIRMED (2024+)"
+        return True, "HW4 LIKELY (model-year inference)"
 
     # 2. Explicit HW4 mentions in description, dealer notes, or options
     if 'hw4' in desc or 'hardware 4' in desc or 'ap04' in desc:
-        return True, "HW4 CONFIRMED (Dealer/Spec)"
+        return True, "HW4 SELLER CLAIM (unverified)"
 
     # 3. 2023 Model S & Model X (switched to HW4 in Jan/Feb 2023)
     if year == 2023 and ('Model S' in model or 'Model X' in model):
