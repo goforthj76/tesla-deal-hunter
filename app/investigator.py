@@ -46,6 +46,8 @@ def investigate(observations, claims, preferences):
         except (ValueError,TypeError):dist=None
         if dist is not None and dist>preferences['radius']:out_of_area=True
     if out_of_area:warnings.append('At least one observed location is outside the configured radius')
+    if any('autosavvy' in str(o['data'].get('dealer','')).lower() for o in observations):
+        warnings.append('Dealer specializes in branded-title inventory; VIN-specific history required, not proof of this car’s title')
     physical=[c for c in claims if c.get('kind')=='physical_inspection']
     hw=[c for c in physical if c['field']=='hw4'];fsd=[c for c in physical if c['field']=='fsd']
     hw_label=('USER-RECORDED PHYSICAL EVIDENCE: '+hw[-1]['value']) if hw else 'UNVERIFIED — model year and seller wording are not confirmation'

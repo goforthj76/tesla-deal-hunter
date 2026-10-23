@@ -161,12 +161,12 @@ def test_tavily_dedupe_budget_and_cooldown(database,monkeypatch):
     monkeypatch.setattr(main.httpx,'post',post)
     assert main.discover()['new_urls']==1
     d=main.discovery_state()
-    assert len(d['leads'])==1 and d['reserved_calls']==1
+    assert len(d['leads'])==1 and d['reserved_calls']==4
     assert 'fixture-secret' not in json.dumps(d)
-    assert main.discover()['status']=='cooldown' and len(calls)==1
-    d.update(next_scan=0,reserved_calls=300);main.save_discovery(d)
+    assert main.discover()['status']=='cooldown' and len(calls)==4
+    d.update(next_scan=0,reserved_calls=750);main.save_discovery(d)
     assert main.discover()['status']=='local monthly cap reached'
-    assert len(calls)==1
+    assert len(calls)==4
 
 def test_discovery_url_rejects_unsafe_schemes():
     assert main.canonical_discovery_url('javascript:alert(1)') is None

@@ -37,3 +37,11 @@ def test_evidence_api_roundtrip(database,monkeypatch):
     assert c.post(f'/api/investigate/{vin}/evidence/{identifier}/retract').status_code==200
     assert c.get('/api/investigate/'+vin).json()['claims']==[]
     assert c.post('/api/investigate/INVALID/evidence',json={'field':'trim','value':'Base','kind':'seller','source':'test'}).status_code==422
+from test_core import database, record
+
+def test_populated_inventory_investigation(database,monkeypatch):
+    from app import main
+    monkeypatch.setattr(main,'settings',lambda:main.Preferences().model_dump())
+    main.ingest('test',[record()],False)
+    rows=main.vehicle_rows()
+    assert len(rows)==1 and 'investigation' in rows[0]
