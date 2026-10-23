@@ -12,8 +12,8 @@ from .collectors import AGENT
 
 SEEDS=json.loads((Path(__file__).parent/'research_seeds.json').read_text(encoding='utf-8'))
 DEALERS=sorted({s['domain'].removeprefix('www.') for s in SEEDS} - {'dealeressential.com','zevoev.com'})
-MARKETS=['carmax.com','cars.com','cargurus.com','autotrader.com','truecar.com','carvana.com','tesla.com']
-TOWNS=['Flower Mound','Lewisville','Denton','Grapevine','Coppell','Southlake','Keller','Irving','Plano','Fort Worth','Dallas','Frisco']
+MARKETS=['carmax.com','cars.com','cargurus.com','autotrader.com','truecar.com','carvana.com','tesla.com','carsforsale.com','autotempest.com','edmunds.com','autonation.com','hertzcarsales.com','enterprisecarsales.com']
+TOWNS=['Flower Mound','Lewisville','Denton','Grapevine','Coppell','Southlake','Keller','Irving','Plano','Fort Worth','Dallas','Frisco','Carrollton','Richardson','McKinney','Arlington','Hurst','Euless','Bedford','The Colony','Roanoke','North Richland Hills']
 CAP=750
 BATCH=4
 INTERVAL=4*3600
@@ -125,3 +125,19 @@ async def inspect_dealers(urls,emit):
     rows=[r for batch in batches for r in batch]
     emit(f'Dealer discovery: {stats["read"]} pages read, {len(rows)} vehicle records, {stats["blocked"]} restricted, {stats["failed"]} failed')
     return rows,stats
+
+
+def vin_result_matches(item,vin):
+    # Exact VIN must appear in returned text or URL. Search rank is not evidence.
+    return vin.upper() in ' '.join(str(item.get(k,'')) for k in ['title','content','url']).upper()
+
+def choose_vin_task(candidates,attempts,clock):
+    eligible=[]
+    for d in candidates:
+        try:vin=normalize_vin(d.get('vin'))
+        except ValueError:continue
+        price=d.get('price');year=d.get('year') or 0
+        if not isinstance(price,(int,float)) or not 5000<=price<=36000 or year<2023:continue
+        if clock-attempts.get(vin,0)<7*86400:continue
+        eligible.append((-(year),d.get('mileage') if isinstance(d.get('mileage'),(int,float)) else 999999,vin))
+    return min(eligible)[2] if eligible else None
