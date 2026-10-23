@@ -43,6 +43,8 @@ def investigate(observations, claims, preferences):
     history=[c for c in by['history'] if adverse_claim(c['value'])]
     if history:warnings.append('Adverse history evidence recorded; excluded pending resolution')
     for o in observations:
+        if o['data'].get('carfax_clean_title') is False:
+            warnings.append('Source clean-title flag is false; meaning and VIN-specific history must be verified')
         text=o['data'].get('description','')
         # Positive disclosure only; generic keyword hits remain review tasks, not facts.
         if adverse_claim(text):

@@ -53,3 +53,10 @@ def test_negated_and_generic_history_not_positive_proof():
  assert not adverse_claim('Some vehicles may have a total loss')
  assert adverse_claim('Clean title. With a total loss on CARFAX')
  assert adverse_claim('No salvage title, but insurance total loss')
+
+def test_false_clean_title_flag_is_review_not_verified_salvage():
+ d=investigate([obs('x',carfax_clean_title=False)],[],P)
+ assert d['purchase_readiness']=='HOLD'
+ assert d['history'].startswith('UNKNOWN')
+ assert any('flag is false' in w for w in d['warnings'])
+ assert not any('verified adverse' in w.lower() for w in d['warnings'])

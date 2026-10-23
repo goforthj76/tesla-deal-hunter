@@ -19,7 +19,7 @@ from .database import ROOT, Base, engine, Session, Vehicle, Listing, Price, Sour
 from .analysis import assess, ranking_key, normalize_vin
 from .database import Evidence, Observation
 from .investigator import investigate, FIELDS, KINDS
-from .expanded import CAP, BATCH, INTERVAL, plans, relevant, inspect_dealers, SEEDS
+from .expanded import CAP, BATCH, INTERVAL, plans, relevant, inspect_dealers, SEEDS, choose_vin_task, vin_result_matches
 from .collectors import autohub, marketcheck, dallas, tesla_used, cars_com, cargurus, carvana_search, truecar_search, scan_all_sources
 from .scoring import score_deal, compute_market_averages, check_hw4
 
@@ -226,11 +226,17 @@ def discover():
         if not data['configured']: return {'status':'API key not configured'}
         if data['next_scan']>time.time(): return {'status':'cooldown','next_scan':data['next_scan']}
         if not data['remaining']: return {'status':'local monthly cap reached'}
-        plan=plans();leads={x['url']:x for x in data['leads'] if relevant(x)}
+        plan=plans();leads={x['url']:x for x in data['leads'] if relevant(x) or x.get('vin')}
+        with Session() as session:
+            candidates=[dict(l.data,vin=l.vin) for l in session.scalars(select(Listing).where(Listing.status=='ACTIVE'))]
+        attempts=dict(data.get('vin_attempts',{}))
         data.update(next_scan=time.time()+INTERVAL,status='SEARCHING')
         new_count=0;result_count=0;filtered=0;errors=[];completed=0
         for _ in range(min(BATCH,data['remaining'])):
-            item=plan[data['cursor']%len(plan)]
+            vin=choose_vin_task(candidates,attempts,time.time()) if data['cursor']%4==3 else None
+            item={'query':'"'+vin+'" Tesla history auction salvage dealer location','label':'VIN '+vin,'domains':[]} if vin else plan[(data['cursor']-data['cursor']//4)%len(plan)]
+            if vin:
+                attempts[vin]=time.time();data['vin_attempts']=attempts
             data.update(reserved_calls=data.get('reserved_calls',0)+1,cursor=data['cursor']+1,last_query=item['query'])
             save_discovery(data) # Each request reserved before I/O, including errors.
             try:
@@ -241,11 +247,14 @@ def discover():
                 payload=response.json()
                 if not isinstance(payload.get('results'),list):raise ValueError('Unexpected Tavily response')
                 completed+=1;result_count+=len(payload['results'])
+                runs=list(data.get('query_runs',[]))
+                runs.append({'query':item['query'],'label':item['label'],'at':now(),'results':len(payload['results']),'vin':vin})
+                data['query_runs']=runs[-120:]
                 for result in payload['results']:
                     url=canonical_discovery_url(result.get('url',''))
-                    if not url or not relevant(result):filtered+=1;continue
+                    if not url or not (vin_result_matches(result,vin) if vin else relevant(result)):filtered+=1;continue
                     prior=leads.get(url);new_count+=int(prior is None)
-                    leads[url]={'url':url,'title':str(result.get('title',''))[:300],'snippet':str(result.get('content',''))[:1200],'first_seen':prior['first_seen'] if prior else now(),'last_seen':now(),'town_query':item['label'],'status':'UNVERIFIED LEAD — distance, availability and VIN need review'}
+                    leads[url]={'url':url,'title':str(result.get('title',''))[:300],'snippet':str(result.get('content',''))[:1200],'first_seen':prior['first_seen'] if prior else now(),'last_seen':now(),'town_query':item['label'],'vin':vin,'status':'UNVERIFIED LEAD — distance, availability and VIN need review'}
                 data.update(leads=sorted(leads.values(),key=lambda x:x['last_seen'],reverse=True)[:2000])
                 save_discovery(data)
             except Exception as exc:
@@ -356,7 +365,7 @@ def vehicle_rows():
             deal = score_deal(d, market_comps, pref)
 
             historical_only = all(l.source == 'MarketCheck' for l in (active or records)) and not MARKETCHECK_ARCHIVE_ENABLED
-            risks = list(dict.fromkeys(deal.get('risks', []) + analysis.get('risks', [])))
+            risks = list(analysis.get('risks', []))
             if historical_only:
                 risks.append('Historical MarketCheck snapshot; availability and price are not refreshed')
 
@@ -574,7 +583,7 @@ def investigate_vin(vin:str):
         observations=[dict(source=x.source,url=x.url,observed=x.observed,data=x.data) for x in snapshots]
         observations += [dict(source=x.source,url=x.url,observed=x.last_seen,data=x.data) for x in records]
         claims=[dict(id=x.id,field=x.field,value=x.value,kind=x.kind,source=x.source,url=x.url,observed=x.observed) for x in session.scalars(select(Evidence).where(Evidence.vin==vin,Evidence.retracted==False).order_by(Evidence.id))]
-    return dict(vin=vin,observations=observations,**investigate(observations,claims,settings()))
+    return dict(vin=vin,observations=observations,research_leads=[x for x in discovery_state()['leads'] if x.get('vin')==vin],**investigate(observations,claims,settings()))
 
 @app.post('/api/investigate/{vin}/evidence')
 def add_evidence(vin:str,p:EvidenceInput):
