@@ -21,6 +21,15 @@ function bangForBuck(v) {
   return (score * 1000 / price) * yearFactor * mileageFactor;
 }
 
+function hasOpportunity(v, keyword) {
+  return (v.investigation?.opportunities || []).some(o => o.toUpperCase().includes(keyword.toUpperCase()));
+}
+
+function isHiddenGem(v) {
+  const opps = v.investigation?.opportunities || [];
+  return opps.some(o => o.includes('PERFORMANCE') || o.includes('LONG RANGE') || o.includes('MISIDENTIFIED') || o.includes('AWD') || o.includes('DUAL MOTOR') || o.includes('FSD')) || (v.fsd && v.fsd.includes('PAID'));
+}
+
 async function api(url, options) {
   const r = await fetch(url, options);
   if (!r.ok) throw Error(`Request failed (${r.status})`);
@@ -70,13 +79,16 @@ function render() {
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', '💎 Misidentified LR', '🎯 Best Bang for Buck', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', '🗑️ Trash VINs', 'STARRED'];
+  const categories = ['ALL', '💎 Hidden Gems', '🚀 Hidden Performance', '⚡ Hidden AWD / LR', '🧠 Paid FSD Included', '🎯 Best Bang for Buck', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', '🗑️ Trash VINs', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;
       if (c === 'ALL') count = state.vehicles.filter((v) => v.category !== 'TRASH VIN').length;
       else if (c === 'STARRED') count = state.vehicles.filter((v) => v.watched).length;
-      else if (c === '💎 Misidentified LR') count = state.vehicles.filter((v) => (v.investigation?.opportunities || []).some((o) => o.includes('MISIDENTIFIED'))).length;
+      else if (c === '💎 Hidden Gems') count = state.vehicles.filter(isHiddenGem).length;
+      else if (c === '🚀 Hidden Performance') count = state.vehicles.filter(v => hasOpportunity(v, 'PERFORMANCE')).length;
+      else if (c === '⚡ Hidden AWD / LR') count = state.vehicles.filter(v => hasOpportunity(v, 'AWD') || hasOpportunity(v, 'DUAL MOTOR') || hasOpportunity(v, 'LONG RANGE') || hasOpportunity(v, 'MISIDENTIFIED')).length;
+      else if (c === '🧠 Paid FSD Included') count = state.vehicles.filter(v => hasOpportunity(v, 'FSD') || (v.fsd && v.fsd.includes('PAID'))).length;
       else if (c === '🎯 Best Bang for Buck') count = state.vehicles.filter((v) => bangForBuck(v) >= 1.1).length;
       else if (c === '⚡ HW4 / 2024+') count = state.vehicles.filter((v) => v.category !== 'TRASH VIN' && ((v.year && v.year >= 2024) || (v.hw4 && v.hw4.includes('HW4')))).length;
       else if (c === '🗑️ Trash VINs') count = state.vehicles.filter((v) => v.category === 'TRASH VIN').length;
@@ -122,8 +134,17 @@ function renderVehicles() {
     if (currentFilter === 'STARRED') return v.watched;
     if (currentFilter === '🗑️ Trash VINs') return v.category === 'TRASH VIN';
     if (v.category === 'TRASH VIN') return false;
-    if (currentFilter === '💎 Misidentified LR') {
-      return (v.investigation?.opportunities || []).some((o) => o.includes('MISIDENTIFIED'));
+    if (currentFilter === '💎 Hidden Gems') {
+      return isHiddenGem(v);
+    }
+    if (currentFilter === '🚀 Hidden Performance') {
+      return hasOpportunity(v, 'PERFORMANCE');
+    }
+    if (currentFilter === '⚡ Hidden AWD / LR') {
+      return hasOpportunity(v, 'AWD') || hasOpportunity(v, 'DUAL MOTOR') || hasOpportunity(v, 'LONG RANGE') || hasOpportunity(v, 'MISIDENTIFIED');
+    }
+    if (currentFilter === '🧠 Paid FSD Included') {
+      return hasOpportunity(v, 'FSD') || (v.fsd && v.fsd.includes('PAID'));
     }
     if (currentFilter === '🎯 Best Bang for Buck') {
       return bangForBuck(v) >= 1.1;
@@ -138,10 +159,15 @@ function renderVehicles() {
   });
 
   list.sort((a, b) => {
-    if (sort === 'misidentified') {
-      const aM = (a.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? 1 : 0;
-      const bM = (b.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? 1 : 0;
-      return (bM - aM) || ((b.deal_score || 0) - (a.deal_score || 0));
+    if (sort === 'hidden_gems') {
+      const aG = isHiddenGem(a) ? 1 : 0;
+      const bG = isHiddenGem(b) ? 1 : 0;
+      return (bG - aG) || ((b.deal_score || 0) - (a.deal_score || 0));
+    }
+    if (sort === 'performance') {
+      const aP = hasOpportunity(a, 'PERFORMANCE') ? 1 : 0;
+      const bP = hasOpportunity(b, 'PERFORMANCE') ? 1 : 0;
+      return (bP - aP) || ((b.deal_score || 0) - (a.deal_score || 0));
     }
     if (sort === 'bang') return bangForBuck(b) - bangForBuck(a);
     if (sort === 'score') return Number(a.investigation?.purchase_readiness === 'HOLD') - Number(b.investigation?.purchase_readiness === 'HOLD') || (b.deal_score || 0) - (a.deal_score || 0);
@@ -188,8 +214,11 @@ function renderVehicles() {
           <p class="car-meta">🛣️ ${v.mileage ? v.mileage.toLocaleString() + ' mi' : 'Unknown miles'} · 📍 ${v.distance ? v.distance + ' mi away' : 'Distance unverified'}</p>
           <div class="car-tags">
             ${v.investigation?.purchase_readiness === 'HOLD' ? '<span class="tag" style="background:#5c1d1d; color:#ffa198; font-weight:700;">🚨 HOLD</span>' : ''}
+            ${hasOpportunity(v, 'PERFORMANCE') ? '<span class="tag" style="background:#5c1d1d; color:#ff7b72; font-weight:700; border:1px solid #f85149;">🚀 Hidden Performance</span>' : ''}
+            ${hasOpportunity(v, 'LONG RANGE') || hasOpportunity(v, 'MISIDENTIFIED') ? '<span class="tag" style="background:#1f4b2b; color:#7ee787; font-weight:700; border:1px solid #2ea043;">💎 Hidden Long Range</span>' : ''}
+            ${hasOpportunity(v, 'AWD') || hasOpportunity(v, 'DUAL MOTOR') ? '<span class="tag" style="background:#1f3d59; color:#79c0ff; font-weight:700; border:1px solid #388bfd;">⚡ Hidden Dual Motor / AWD</span>' : ''}
+            ${hasOpportunity(v, 'FSD') || (v.fsd && v.fsd.includes('PAID')) ? '<span class="tag" style="background:#492652; color:#e3b341; font-weight:700; border:1px solid #d29922;">🧠 Paid FSD Included</span>' : ''}
             ${bangForBuck(v) >= 1.1 ? '<span class="tag" style="background:#0f3822; color:#3fb950; font-weight:700; border:1px solid #238636;">🎯 Best Bang for Buck</span>' : ''}
-            ${(v.investigation?.opportunities || []).some(o => o.includes('MISIDENTIFIED')) ? '<span class="tag" style="background:#1f4b2b; color:#7ee787; font-weight:700; border:1px solid #2ea043;">💎 Misidentified Long Range</span>' : ''}
             <span class="tag">${v.category}</span>
             <span class="tag">${v.hw4 || 'Hardware info'}</span>
             <span class="tag">${v.dealer || 'Dealer'}</span>
@@ -367,8 +396,10 @@ window.addEventListener('DOMContentLoaded', () => {
   $('filters').addEventListener('click', (e) => {
     if (e.target.dataset.cat) {
       currentFilter = e.target.dataset.cat;
-      if (currentFilter === '💎 Misidentified LR' && $('sort')) {
-        $('sort').value = 'misidentified';
+      if (currentFilter === '💎 Hidden Gems' && $('sort')) {
+        $('sort').value = 'hidden_gems';
+      } else if (currentFilter === '🚀 Hidden Performance' && $('sort')) {
+        $('sort').value = 'performance';
       } else if (currentFilter === '🎯 Best Bang for Buck' && $('sort')) {
         $('sort').value = 'bang';
       }

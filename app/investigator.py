@@ -52,17 +52,54 @@ def investigate(observations, claims, preferences):
         if len(values)>1 and max(values)-min(values)>tolerance:conflicts.append({'field':field,'values':values,'message':field.upper()+' VARIATION — may reflect elapsed time or pricing terms'})
     trims=by['trim']
     drivetrains=by['drivetrain']
-    all_vins = {o.get('data', {}).get('vin') for o in observations if o.get('data', {}).get('vin')}
-    factory_dual_motor = any(isinstance(v, str) and len(v) == 17 and v[7] in ('B', 'C', 'D', 'E', 'F') for v in all_vins)
-    has_generic = any(generic_trim(c['value']) for c in trims) or any(str(c['value']).strip().lower() in ('rwd', 'rear wheel drive') for c in drivetrains)
-    has_long_range = any('long range' in str(c['value']).lower() or 'dual motor' in str(c['value']).lower() or 'awd' in str(c['value']).lower() for c in trims + drivetrains)
-    is_advertised_lr = any('long range' in str(c['value']).lower() or 'performance' in str(c['value']).lower() for c in trims)
+    obs_sorted = sorted(observations, key=lambda o: str(o.get('observed', '')), reverse=True)
+    current_obs = obs_sorted[0].get('data', {}) if obs_sorted else {}
+    curr_trim = str(current_obs.get('trim', '')).strip().lower()
+    curr_dt = str(current_obs.get('drivetrain', '')).strip().lower()
+    curr_desc = str(current_obs.get('description', ''))
 
-    if has_generic and has_long_range:
-        opportunities.append('POSSIBLE MISIDENTIFIED LONG RANGE: conflicting trim evidence; verify Software screen and drivetrain')
-    elif has_generic and factory_dual_motor and not is_advertised_lr:
-        opportunities.append('POSSIBLE MISIDENTIFIED LONG RANGE: factory VIN motor code confirms Dual Motor AWD; advertised as generic Base/RWD')
-    elif any(generic_trim(c['value']) for c in trims):
+    curr_is_generic = generic_trim(curr_trim)
+    curr_is_rwd = curr_dt in ('rwd', 'rear wheel drive', '') or curr_is_generic
+    curr_is_perf = 'performance' in curr_trim or 'plaid' in curr_trim
+    curr_is_lr = 'long range' in curr_trim
+    curr_is_awd = curr_dt in ('awd', 'all-wheel drive', '4wd', 'dual motor') or 'dual motor' in curr_trim or 'awd' in curr_trim
+    curr_has_fsd = bool(re.search(r'(full self driving|fsd)\s+(paid|included|equipped|purchased)', curr_desc, re.I))
+
+    all_vins = {o.get('data', {}).get('vin') for o in observations if o.get('data', {}).get('vin')}
+    motor_codes = {v[7] for v in all_vins if isinstance(v, str) and len(v) == 17}
+    vin_is_perf = any(c in ('C', 'F', 'L', '4') for c in motor_codes)
+    vin_is_lr = any(c in ('B', 'D', 'E', '5') for c in motor_codes)
+    vin_is_dual = any(c in ('B', 'C', 'D', 'E', 'F', 'K', '2', '4', '5') for c in motor_codes)
+
+    all_trims = [str(c['value']).lower() for c in by['trim']]
+    all_dts = [str(c['value']).lower() for c in by['drivetrain']]
+    all_fsd = [str(c['value']).lower() for c in by['fsd']]
+    all_descs = [str(o.get('data', {}).get('description', '')) for o in observations] + [str(c.get('excerpt', '')) for c in claims]
+
+    prior_has_perf = any('performance' in t or 'plaid' in t for t in all_trims)
+    prior_has_lr = any('long range' in t for t in all_trims)
+    prior_has_awd = any('dual motor' in t or 'awd' in t for t in all_trims + all_dts) or any('dual motor' in d.lower() or 'all-wheel drive' in d.lower() for d in all_descs)
+    prior_has_fsd = any('paid' in f or 'included' in f or 'purchased' in f for f in all_fsd) or any(bool(re.search(r'(full self driving|fsd)\s+(paid|included|equipped|purchased)', d, re.I)) and not re.search(r'(subscription|monthly|trial)', d, re.I) for d in all_descs)
+
+    # 1. Hidden Performance
+    if (vin_is_perf or prior_has_perf) and not curr_is_perf:
+        opportunities.append('🚀 HIDDEN PERFORMANCE: Prior records or factory VIN confirm Performance Dual Motor, but current dealer advertises as standard trim')
+
+    # 2. Hidden Long Range (covers old listing says LR, current listing says Base/RWD)
+    if (prior_has_lr or (vin_is_lr and curr_is_generic)) and not curr_is_lr and not curr_is_perf:
+        opportunities.append('💎 POSSIBLE MISIDENTIFIED LONG RANGE: Prior records or factory VIN confirm Long Range, but current dealer advertises as generic/Base model')
+
+    # 3. Hidden AWD / Dual Motor (covers old listing says AWD/Dual Motor, current says RWD)
+    if (prior_has_awd or (vin_is_dual and curr_is_rwd)) and not curr_is_awd and not curr_is_lr and not curr_is_perf:
+        opportunities.append('⚡ HIDDEN AWD / DUAL MOTOR: Prior records or factory VIN confirm factory Dual Motor AWD, but current listing lists as RWD/Base')
+
+    # 4. Hidden Permanent FSD (covers old listing says FSD, current listing dropped it)
+    if prior_has_fsd and not curr_has_fsd:
+        opportunities.append('🧠 PERMANENT PURCHASED FSD: Prior listing or web records confirm Paid FSD included, but current dealer omitted it ($8,000-$15,000 added value)')
+    elif prior_has_fsd:
+        opportunities.append('🧠 PERMANENT PURCHASED FSD DETECTED: Full Self-Driving included ($8,000-$15,000 added value)')
+
+    if not opportunities and any(generic_trim(c['value']) for c in trims):
         opportunities.append('Trim verification task: generic trim alone is not evidence of Long Range')
     history=[c for c in by['history'] if adverse_claim(c['value'])]
     if history:warnings.append('Adverse history evidence recorded; excluded pending resolution')
