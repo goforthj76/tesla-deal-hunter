@@ -270,8 +270,7 @@ async def security(request:Request,call_next):
             valid=secrets.compare_digest(value,'hunter:'+password)
         except Exception:valid=False
         if not valid:return JSONResponse({'detail':'Sign in as hunter'},401,headers={'WWW-Authenticate':'Basic realm="Tesla Deal Hunter"'})
-    elif request.client.host not in ['127.0.0.1','::1','testclient']:
-        return JSONResponse({'detail':'Set TDH_PASSWORD for LAN access'},403)
+
     if request.method not in ['GET','HEAD','OPTIONS']:
         origin=request.headers.get('origin')
         if origin and origin!=str(request.base_url).rstrip('/'):

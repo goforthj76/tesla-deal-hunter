@@ -58,9 +58,9 @@ class Source(Base):
 class Activity(Base):
     __tablename__ = 'activity'
     id: Mapped[int] = mapped_column(primary_key=True)
-    created: Mapped[str] = mapped_column(String, default=now)
+    at: Mapped[str] = mapped_column(String, default=now)
     message: Mapped[str] = mapped_column(Text)
-    at = synonym('created')
+    created = synonym('at')
 
 class Setting(Base):
     __tablename__ = 'settings'
