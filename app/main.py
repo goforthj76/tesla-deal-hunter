@@ -1,5 +1,6 @@
 from .vin_queue import sync_jobs, next_job, snippet_claims, summary as queue_summary, RETRY_SECONDS
 import asyncio
+import re
 import math
 from datetime import datetime, timezone, timedelta
 import hashlib
@@ -19,7 +20,7 @@ from sqlalchemy import select, delete
 from .database import ROOT, Base, engine, Session, Vehicle, Listing, Price, Source, Activity, Setting, Hunt, now, migrate_legacy_database
 from .analysis import assess, ranking_key, normalize_vin
 from .database import Evidence, Observation
-from .investigator import investigate, FIELDS, KINDS
+from .investigator import investigate, FIELDS, KINDS, decode_tesla_motor, adverse_claim
 from .expanded import CAP, BATCH, INTERVAL, plans, relevant, inspect_dealers, SEEDS, choose_vin_task, vin_result_matches
 from .collectors import autohub, marketcheck, dallas, tesla_used, cars_com, cargurus, carvana_search, truecar_search, scan_all_sources
 from .scoring import score_deal, compute_market_averages, check_hw4
@@ -712,3 +713,152 @@ def vin_queue_status():
     with Session() as session:vins=list(session.scalars(select(Vehicle.vin)))
     jobs=sync_jobs(data.get('vin_jobs',{}),vins)
     return dict(serper=dict(configured=bool(os.getenv('SERPER_API_KEY')),reserved=data.get('serper_reserved',0)+int(os.getenv('SERPER_PREUSED_CALLS','0')),cap=min(2000,max(0,int(os.getenv('SERPER_MAX_CALLS','2000')))),status=data.get('serper_status','WAITING'),next_cycle=data.get('serper_next',0),batch_size=10,interval_seconds=60,last_batch=data.get('serper_last_batch',0),last_duration=data.get('serper_last_duration',0)),**queue_summary(jobs,time.time()),configured=data['configured'] or bool(os.getenv('SERPER_API_KEY')),remaining_search_calls=data['remaining'],next_cycle=data['next_scan'],vin_searches_per_cycle=3,cycle_hours=INTERVAL/3600,monthly_cap=CAP,jobs=jobs,notice='Every valid tracked VIN is queued. Search snippets are unverified leads. No results does not mean clean history. Search completion is limited by credits and source coverage.')
+
+
+@app.get('/api/lookup')
+def lookup_endpoint(q: str):
+    q = q.strip()
+    if not q:
+        raise HTTPException(400, 'Query parameter is required')
+    
+    is_vin = len(q) == 17 and bool(re.match(r'^[A-HJ-NPR-Z0-9]{17}$', q.upper()))
+    pref = settings()
+    rows = vehicle_rows()
+    
+    if is_vin:
+        vin = q.upper()
+        matched = next((r for r in rows if r.get('vin') == vin), None)
+        factory = decode_tesla_motor(vin)
+        
+        plant_char = vin[10].upper()
+        plant_map = {'F': 'Fremont, CA', 'A': 'Gigafactory Texas (Austin)', 'B': 'Gigafactory Berlin', 'C': 'Gigafactory Shanghai'}
+        plant = plant_map.get(plant_char, 'Tesla Assembly Plant')
+        
+        year_char = vin[9].upper()
+        year_map = {'L': 2020, 'M': 2021, 'N': 2022, 'P': 2023, 'R': 2024, 'S': 2025, 'T': 2026}
+        factory_year = year_map.get(year_char, matched.get('year') if matched else 2024)
+        
+        is_highland = (factory.get('model') == '3' and (factory_year or 0) >= 2024)
+        
+        is_hw4 = False
+        if factory.get('model') == '3' and (factory_year or 0) >= 2024:
+            is_hw4 = True
+        elif factory.get('model') == 'Y':
+            if (factory_year or 0) >= 2024:
+                is_hw4 = True
+            elif (factory_year or 0) == 2023 and plant_char == 'A':
+                try:
+                    serial = int(vin[11:])
+                    if serial >= 160000: is_hw4 = True
+                except ValueError: pass
+                
+        with Session() as session:
+            records = list(session.scalars(select(Listing).where(Listing.vin == vin)))
+            snapshots = list(session.scalars(select(Observation).where(Observation.vin == vin).order_by(Observation.id)))
+            observations = [dict(source=x.source, url=x.url, observed=x.observed, data=x.data) for x in snapshots]
+            observations += [dict(source=x.source, url=x.url, observed=x.last_seen, data=x.data) for x in records]
+            claims = [dict(id=x.id, field=x.field, value=x.value, kind=x.kind, source=x.source, url=x.url, observed=x.observed) for x in session.scalars(select(Evidence).where(Evidence.vin == vin, Evidence.retracted == False).order_by(Evidence.id))]
+            
+        job = discovery_state().get('vin_jobs', {}).get(vin, {'status': 'PENDING', 'claims': [], 'leads': []})
+        all_claims = claims + job.get('claims', [])
+        findings = investigate(observations, all_claims, pref)
+        
+        model = matched.get('model') if matched else (f"Model {factory.get('model')}" if factory.get('model') else "Model 3")
+        year = matched.get('year') if matched else factory_year or 2024
+        
+        all_comps = [r for r in rows if r.get('model') == model and r.get('year') == year and r.get('price')]
+        avg_price = round(sum(r['price'] for r in all_comps) / len(all_comps), 2) if all_comps else 0
+        avg_miles = round(sum(r['mileage'] for r in all_comps if r.get('mileage')) / len([r for r in all_comps if r.get('mileage')]), 0) if any(r.get('mileage') for r in all_comps) else 0
+        
+        return {
+            'type': 'vin_dossier',
+            'vin': vin,
+            'matched': matched,
+            'factory': {
+                'model': factory.get('model'),
+                'year': factory_year,
+                'motor_code': factory.get('motor_code'),
+                'motor_type': factory.get('motor_type'),
+                'drivetrain': factory.get('drivetrain'),
+                'plant': plant,
+                'is_highland': is_highland,
+                'is_hw4': is_hw4,
+                'is_dual': factory.get('is_dual'),
+                'is_single': factory.get('is_single'),
+                'is_perf': factory.get('is_perf'),
+            },
+            'investigation': findings,
+            'records': [dict(source=l.source, url=l.url, observed=l.last_seen, status=l.status, price=l.data.get('price'), dealer=l.data.get('dealer'), address=l.data.get('address')) for l in records],
+            'claims': all_claims,
+            'research_leads': job.get('leads', []),
+            'comps': {
+                'model': model,
+                'year': year,
+                'sample_size': len(all_comps),
+                'avg_price': avg_price,
+                'avg_miles': avg_miles,
+            }
+        }
+    else:
+        q_lower = q.lower()
+        matches = []
+        for r in rows:
+            text = f"{r.get('vin')} {r.get('model')} {r.get('trim')} {r.get('dealer')} {r.get('address')} {r.get('year')} {r.get('category')}".lower()
+            if q_lower in text:
+                matches.append(r)
+        return {
+            'type': 'search_results',
+            'query': q,
+            'count': len(matches),
+            'results': matches[:50]
+        }
+
+@app.post('/api/lookup/serper-scan/{vin}')
+def trigger_serper_scan(vin: str):
+    try: vin = normalize_vin(vin)
+    except ValueError: raise HTTPException(422, 'Invalid VIN')
+    
+    api_key = os.getenv('SERPER_API_KEY')
+    if not api_key:
+        raise HTTPException(400, 'Serper API key not configured')
+        
+    try:
+        response = httpx.post(
+            'https://google.serper.dev/search',
+            headers={'X-API-KEY': api_key},
+            json={'q': f'"{vin}"', 'gl': 'us', 'hl': 'en', 'num': 10},
+            timeout=25
+        )
+        if response.status_code != 200:
+            raise HTTPException(502, f'Serper API returned {response.status_code}')
+        payload = response.json()
+    except Exception as e:
+        raise HTTPException(502, f'Serper search failed: {e}')
+        
+    leads = []; claims = []
+    data = discovery_state()
+    jobs = data.get('vin_jobs', {})
+    job = jobs.setdefault(vin, {'status': 'PENDING', 'attempts': 0, 'last_success': 0, 'claims': [], 'leads': []})
+    
+    for raw in payload.get('organic', []):
+        result = {'url': raw.get('link', ''), 'title': raw.get('title', ''), 'content': raw.get('snippet', '')}
+        url = canonical_discovery_url(result['url'])
+        if not url or not vin_result_matches(result, vin): continue
+        result['url'] = url
+        leads.append(dict(url=url, title=result['title'][:300], snippet=result['content'][:1600]))
+        extracted = snippet_claims(vin, result, now())
+        claims.extend(extracted)
+        
+    job.update(status='SEARCHED' if leads else 'NO_EXACT_RESULTS', last_success=time.time(), leads=leads, claims=claims)
+    data['serper_reserved'] = data.get('serper_reserved', 0) + 1
+    data['vin_jobs'] = jobs
+    save_discovery(data)
+    
+    with Session.begin() as s:
+        for c in claims:
+            if c.get('field') == 'history':
+                existing = s.scalar(select(Evidence).where(Evidence.vin == vin, Evidence.field == 'history', Evidence.url == c.get('url', '')))
+                if not existing:
+                    s.add(Evidence(vin=vin, field='history', value=c['value'], kind='history_report', source=c.get('source', 'Serper Web Research'), url=c.get('url', ''), observed=now()))
+                    
+    return lookup_endpoint(vin)

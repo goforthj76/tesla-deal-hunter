@@ -527,4 +527,248 @@ window.addEventListener('DOMContentLoaded', () => {
       alert('Error saving settings: ' + err.message);
     }
   });
+
+  setupLookupUI();
 });
+
+// ========================================================
+// MASSIVE VIN & DEAL LOOKUP ENGINE
+// ========================================================
+function setupLookupUI() {
+  const input = $('lookup-input');
+  const btn = $('lookup-btn');
+  const status = $('lookup-status');
+  const searchResults = $('lookup-search-results');
+  const searchGrid = $('lookup-search-grid');
+  const searchCount = $('lookup-search-count');
+  const dossier = $('lookup-dossier');
+
+  if (!input || !btn) return;
+
+  async function performLookup(query) {
+    query = (query || input.value || '').trim();
+    if (!query) return;
+    input.value = query;
+
+    status.style.display = 'block';
+    status.style.color = '#d29922';
+    status.textContent = `🔍 Investigating "${query}" across factory NHTSA data, auction records, and 1,500+ Texas comps...`;
+    searchResults.style.display = 'none';
+    dossier.style.display = 'none';
+
+    try {
+      const data = await api(`/api/lookup?q=${encodeURIComponent(query)}`);
+      status.style.display = 'none';
+
+      if (data.type === 'search_results') {
+        renderSearchResults(data);
+      } else if (data.type === 'vin_dossier') {
+        renderVinDossier(data);
+      }
+    } catch (e) {
+      status.style.display = 'block';
+      status.style.color = '#f85149';
+      status.textContent = `Error during lookup: ${e.message}`;
+    }
+  }
+
+  btn.onclick = () => performLookup();
+  input.onkeydown = (e) => { if (e.key === 'Enter') performLookup(); };
+
+  document.querySelectorAll('.quick-chip').forEach((chip) => {
+    chip.onclick = () => {
+      const vin = chip.dataset.vin;
+      performLookup(vin);
+    };
+  });
+
+  function renderSearchResults(data) {
+    searchResults.style.display = 'block';
+    searchCount.textContent = data.count;
+    if (!data.results || data.results.length === 0) {
+      searchGrid.innerHTML = '<p style="color:var(--muted)">No vehicles found matching your query.</p>';
+      return;
+    }
+    searchGrid.innerHTML = data.results.map((v) => {
+      const price = v.price ? money(v.price) : 'Unlisted';
+      const miles = v.mileage ? `${v.mileage.toLocaleString()} mi` : 'Unknown mi';
+      return `
+        <div class="card" style="cursor:pointer;" onclick="lookupFromCard('${v.vin}')">
+          <div class="card-header">
+            <strong>${v.year || ''} ${v.model || 'Tesla'} ${v.trim || ''}</strong>
+            <span class="score-badge">${v.deal_score || 0}</span>
+          </div>
+          <div class="card-meta">
+            <span class="price">${price}</span>
+            <span class="miles">${miles}</span>
+          </div>
+          <div style="font-size:0.8rem; color:var(--muted); margin-top:6px;">
+            ${v.dealer || 'Dealer'} · ${v.address || 'Texas'}
+          </div>
+          <div style="margin-top:10px; font-family:monospace; font-size:0.75rem; color:#58a6ff;">
+            VIN: ${v.vin} ↗ Click for Full Dossier
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  window.lookupFromCard = (vin) => {
+    performLookup(vin);
+  };
+
+  function renderVinDossier(data) {
+    dossier.style.display = 'block';
+    const v = data.matched || {};
+    const f = data.factory || {};
+    const inv = data.investigation || {};
+    const comps = data.comps || {};
+
+    const title = `${f.year || v.year || 2024} Tesla Model ${f.model || '3'} ${v.trim || f.motor_type || ''}`;
+    const priceStr = v.price ? money(v.price) : 'Unlisted';
+    const milesStr = v.mileage ? `${v.mileage.toLocaleString()} miles` : 'Mileage Unverified';
+    const readiness = inv.purchase_readiness || 'NEEDS VERIFICATION';
+    const isHold = readiness === 'HOLD';
+    const badgeClass = isHold ? 'badge-salvage' : 'badge-clear';
+    const scoreVal = v.deal_score != null ? v.deal_score : 50;
+
+    $('dossier-header').innerHTML = `
+      <div>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
+          <h2 style="margin:0; font-size:1.3rem;">${title}</h2>
+          <span class="${badgeClass}">${readiness}</span>
+          ${f.is_highland ? '<span class="badge-gem">✨ 2024 HIGHLAND</span>' : ''}
+          ${f.is_hw4 ? '<span class="badge-gem">🧠 HW4 AI COMPUTER</span>' : ''}
+        </div>
+        <div style="color:var(--muted); font-size:0.9rem;">
+          <strong style="color:#58a6ff; font-family:monospace;">${data.vin}</strong> · 
+          ${v.dealer || 'Dealer Unlisted'} · ${v.address || 'Texas'} · Source: ${v.source || 'Aggregator Network'}
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:1.6rem; font-weight:800; color:#3fb950;">${priceStr}</div>
+        <div style="color:var(--muted); font-size:0.85rem;">${milesStr} · Deal Score: <strong>${scoreVal}/100</strong></div>
+      </div>
+    `;
+
+    $('dossier-factory-body').innerHTML = `
+      <div class="dossier-row"><span class="label">Model:</span><span class="val">Model ${f.model || '3'}</span></div>
+      <div class="dossier-row"><span class="label">Model Year:</span><span class="val">${f.year || 2024}</span></div>
+      <div class="dossier-row"><span class="label">Factory Motor Code (Digit 8):</span><span class="val" style="color:#58a6ff;">'${f.motor_code}' (${f.motor_type})</span></div>
+      <div class="dossier-row"><span class="label">Factory Drivetrain:</span><span class="val">${f.drivetrain}</span></div>
+      <div class="dossier-row"><span class="label">Assembly Plant:</span><span class="val">${f.plant}</span></div>
+      <div class="dossier-row"><span class="label">Autopilot Hardware:</span><span class="val">${f.is_hw4 ? '✅ Hardware 4 (HW4)' : 'Hardware 3 (HW3)'}</span></div>
+      <div class="dossier-row"><span class="label">Generation:</span><span class="val">${f.is_highland ? 'Highland Refresh (Acoustic Glass, Ventilated Seats)' : 'Legacy Generation'}</span></div>
+    `;
+
+    const warnings = inv.warnings || [];
+    const hasSalvageAlert = warnings.some(w => w.includes('salvage') || w.includes('Adverse') || w.includes('AutoSavvy') || w.includes('damage'));
+    let historyHtml = '';
+    if (hasSalvageAlert) {
+      historyHtml += `<div style="background:rgba(248,81,73,0.15); border:1px solid #f85149; border-radius:6px; padding:10px; margin-bottom:10px; color:#ff7b72; font-size:0.85rem;">
+        <strong>🚨 RED FLAG DETECTED:</strong> This VIN carries recorded salvage, rebuilt, or auction damage history!
+      </div>`;
+    }
+    historyHtml += warnings.length > 0 
+      ? warnings.map(w => `<div style="color:#f0883e; font-size:0.82rem; margin-bottom:6px;">• ${w}</div>`).join('')
+      : `<div style="color:#3fb950; font-size:0.85rem;">✅ No structural auction hits or salvage tags found in aggregator databases.</div>`;
+    historyHtml += `<div class="dossier-row" style="margin-top:10px;"><span class="label">Clean Title Audit:</span><span class="val">${isHold ? '⚠️ REQUIRES VERIFICATION' : 'PASSING INITIAL CHECKS'}</span></div>`;
+    $('dossier-history-body').innerHTML = historyHtml;
+
+    const opps = inv.opportunities || [];
+    let trimHtml = '';
+    trimHtml += `<div class="dossier-row"><span class="label">Advertised Trim:</span><span class="val">${v.trim || 'Standard / Base'}</span></div>`;
+    trimHtml += `<div class="dossier-row"><span class="label">Factory Motor Code:</span><span class="val">${f.motor_type}</span></div>`;
+    if (f.motor_code === 'B' && (!v.trim || v.trim.toLowerCase().includes('base') || v.trim.toLowerCase().includes('rwd'))) {
+      trimHtml += `<div style="background:rgba(56,139,253,0.15); border:1px solid #388bfd; border-radius:6px; padding:10px; margin:10px 0; color:#58a6ff; font-size:0.85rem;">
+        💎 <strong>TRUE HIDDEN LONG RANGE:</strong> Factory VIN Digit 8 is 'B' (Dual Motor Long Range AWD), but dealer advertised as Base/RWD!
+      </div>`;
+    }
+    if (opps.length > 0) {
+      trimHtml += `<div style="margin-top:8px;">${opps.map(o => `<div style="color:#58a6ff; font-size:0.82rem; margin-bottom:4px;">${o}</div>`).join('')}</div>`;
+    } else {
+      trimHtml += `<div style="color:var(--muted); font-size:0.82rem; margin-top:8px;">No hidden trim mismatches or unadvertised software detected.</div>`;
+    }
+    $('dossier-trim-body').innerHTML = trimHtml;
+
+    const avgP = comps.avg_price || 0;
+    const diff = (v.price && avgP) ? (v.price - avgP) : 0;
+    const diffStr = diff < 0 ? `<span style="color:#3fb950; font-weight:700;">$${Math.abs(diff).toLocaleString()} Below Average!</span>` : `<span style="color:#f85149; font-weight:700;">$${diff.toLocaleString()} Above Average</span>`;
+    $('dossier-comps-body').innerHTML = `
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+        <div class="stat-card" style="text-align:left;">
+          <span style="color:var(--muted); font-size:0.75rem;">Texas Market Average</span>
+          <strong style="font-size:1.2rem; color:#f0f6fc;">${avgP ? money(avgP) : 'N/A'}</strong>
+          <small style="color:var(--muted);">${comps.sample_size} comps tracked</small>
+        </div>
+        <div class="stat-card" style="text-align:left;">
+          <span style="color:var(--muted); font-size:0.75rem;">Price Position</span>
+          <div style="font-size:1.1rem; margin-top:4px;">${diffStr}</div>
+          <small style="color:var(--muted);">Compared to ${comps.year} ${comps.model}</small>
+        </div>
+        <div class="stat-card" style="text-align:left;">
+          <span style="color:var(--muted); font-size:0.75rem;">Average Odometer</span>
+          <strong style="font-size:1.2rem; color:#f0f6fc;">${comps.avg_miles ? comps.avg_miles.toLocaleString() + ' mi' : 'N/A'}</strong>
+          <small style="color:var(--muted);">This car: ${v.mileage ? v.mileage.toLocaleString() + ' mi' : 'Unknown'}</small>
+        </div>
+      </div>
+    `;
+
+    $('dossier-checklist-body').innerHTML = `
+      <div class="check-step"><input type="checkbox"> <div><strong>Main Touchscreen -> Controls -> Software:</strong> Confirm exact trim displayed (e.g. "Model 3 Long Range") and odometer matches listing.</div></div>
+      <div class="check-step"><input type="checkbox"> <div><strong>Controls -> Software -> Additional Vehicle Information:</strong> Confirm "Full Self-Driving Computer: Full self-driving computer 4" (HW4).</div></div>
+      <div class="check-step"><input type="checkbox"> <div><strong>Controls -> Autopilot:</strong> Confirm Full Self-Driving Capability says "Included Package" (NOT monthly subscription or expiring trial).</div></div>
+      <div class="check-step"><input type="checkbox"> <div><strong>Physical VIN Plate Verification:</strong> Match dash VIN plate, driver B-pillar door sticker, and Texas title paperwork.</div></div>
+      <div class="check-step"><input type="checkbox"> <div><strong>Texas Blue Title Inspection:</strong> Verify seller possesses a clean, non-branded Texas blue title with zero salvage/rebuilt branding.</div></div>
+      <div class="check-step"><input type="checkbox"> <div><strong>Itemized Out-the-Door Order:</strong> Decline mandatory dealer add-ons (GPS trackers, tint packs, dealer prep fees).</div></div>
+    `;
+
+    const leads = data.research_leads || [];
+    let researchHtml = '';
+    if (leads.length === 0) {
+      researchHtml = '<p style="color:var(--muted); font-size:0.85rem;">No exact-VIN search leads logged yet. Click the button above to run an instant Google Serper web scan.</p>';
+    } else {
+      researchHtml = leads.map(l => `
+        <div style="padding:8px 0; border-bottom:1px solid rgba(48,54,61,0.3); font-size:0.82rem;">
+          <a href="${l.url}" target="_blank" style="color:#58a6ff; font-weight:600; text-decoration:none;">${l.title || l.url}</a>
+          <p style="color:var(--muted); margin:4px 0;">${l.snippet || ''}</p>
+        </div>
+      `).join('');
+    }
+    $('dossier-research-body').innerHTML = researchHtml;
+
+    $('btn-serper-scan').onclick = async () => {
+      const btnScan = $('btn-serper-scan');
+      btnScan.textContent = 'Scanning Google...';
+      try {
+        const updated = await api(`/api/lookup/serper-scan/${data.vin}`, { method: 'POST' });
+        renderVinDossier(updated);
+        btnScan.textContent = 'Scan Complete';
+      } catch (e) {
+        alert('Serper scan error: ' + e.message);
+        btnScan.textContent = '⚡ Run Live Google Serper Scan';
+      }
+    };
+
+    const evForm = $('lookup-evidence-form');
+    evForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const field = $('evidence-field').value;
+      const value = $('evidence-value').value.trim();
+      const kind = $('evidence-kind').value;
+      if (!value) return alert('Please enter observed value');
+      try {
+        await api(`/api/investigate/${data.vin}/evidence`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ field, value, kind, source: 'User In-Person Inspection' })
+        });
+        alert('Evidence recorded!');
+        performLookup(data.vin);
+      } catch (err) {
+        alert('Failed to record evidence: ' + err.message);
+      }
+    };
+  }
+}
+

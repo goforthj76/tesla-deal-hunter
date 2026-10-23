@@ -643,7 +643,7 @@ async def marketcheck(api_key: str, pref: dict, emit, reserve_call=None) -> tupl
     
     endpoint = 'https://api.marketcheck.com/v2/search/car/active'
     zip_code = str(pref.get('zip_code', '75022'))
-    radius = int(pref.get('radius', 100))
+    radius = min(100, int(pref.get('radius', 100)))
     max_price = int(pref.get('max_price', 35000))
     rows = []
     

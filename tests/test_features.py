@@ -131,3 +131,28 @@ def test_model_y_motor_d_is_rwd():
     assert info['drivetrain'] == 'RWD'
     assert info['is_single'] is True
     assert info['is_dual'] is False
+
+
+def test_lookup_vin_dossier():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    res = c.get('/api/lookup?q=5YJ3E1EB4RF833863')
+    assert res.status_code == 200
+    d = res.json()
+    assert d['type'] == 'vin_dossier'
+    assert d['vin'] == '5YJ3E1EB4RF833863'
+    assert d['factory']['model'] == '3'
+    assert d['factory']['is_highland'] is True
+    assert d['factory']['is_dual'] is True
+    assert 'comps' in d
+
+def test_lookup_keyword_search():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    res = c.get('/api/lookup?q=Model 3')
+    assert res.status_code == 200
+    d = res.json()
+    assert d['type'] == 'search_results'
+    assert d['count'] > 0

@@ -40,7 +40,7 @@
       <button data-view="sources" class="tab-btn">📡 Sources & Scanners</button>
       <button data-view="activity" class="tab-btn">⚡ Live Activity</button>
       <button data-view="discovery" class="tab-btn">🌐 Web Discovery</button>
-      <a href="/investigator" target="_blank" class="tab-btn" style="text-decoration:none; display:inline-flex; align-items:center;">🔍 VIN Investigator ↗</a>
+      <button data-view="lookup" class="tab-btn" id="tab-lookup">🔍 Massive VIN & Deal Lookup</button>
       <button data-view="settings" class="tab-btn">⚙️ Settings</button>
     </nav>
 
@@ -63,6 +63,120 @@
       </div>
       <div class="count-bar"><span id="count">0 deals found</span></div>
       <div class="cars-grid" id="cars"></div>
+    </section>
+
+    <!-- MASSIVE LOOKUP SECTION -->
+    <section id="lookup" class="view-panel">
+      <div class="lookup-hero">
+        <h2>🔍 Massive VIN & Vehicle Deep Investigator</h2>
+        <p class="subtitle">Decode exact factory specs, uncover adverse salvage/auction damage history, verify trim mismatches, and compare against 1,500+ Texas market comps.</p>
+        
+        <div class="lookup-bar">
+          <input type="text" id="lookup-input" placeholder="Paste any 17-char VIN or search dealer, model, trim, city..." autocomplete="off">
+          <button id="lookup-btn" class="action-btn">🔍 Run Deep Lookup</button>
+        </div>
+
+        <div class="quick-vins">
+          <span>Quick Inspect:</span>
+          <button class="quick-chip" data-vin="5YJ3E1EB4RF833863">🟢 #1 Highland LR AWD ($29.9k Rideline)</button>
+          <button class="quick-chip" data-vin="5YJ3E1EA1RF752665">🚨 Wrecked Base Highland (Salvage Alert)</button>
+          <button class="quick-chip" data-vin="5YJ3E1EA4RF871911">⚠️ Performance Conflict (CarMax)</button>
+          <button class="quick-chip" data-vin="7SAYGDEF1RA285373">❌ AutoSavvy Salvage (Florida Auction)</button>
+          <button class="quick-chip" data-vin="7SAYGDED8RF026428">🟡 Model Y LR RWD (Carvana)</button>
+        </div>
+      </div>
+
+      <!-- Live Loading / Error Display -->
+      <div id="lookup-status" style="margin-top:12px; display:none;"></div>
+
+      <!-- Search Results Grid (when searching by keyword) -->
+      <div id="lookup-search-results" style="display:none; margin-top:18px;">
+        <h3>Matching Vehicles in Tracked Inventory (<span id="lookup-search-count">0</span>)</h3>
+        <div class="cars-grid" id="lookup-search-grid" style="margin-top:12px;"></div>
+      </div>
+
+      <!-- Deep Dossier Panel (when a specific VIN is looked up) -->
+      <div id="lookup-dossier" style="display:none; margin-top:24px;">
+        <!-- Vehicle Header Card -->
+        <div class="dossier-header-card" id="dossier-header"></div>
+
+        <!-- 3-Column Spec & Audit Grid -->
+        <div class="dossier-grid">
+          <!-- Col 1: Factory Specs & Decoding -->
+          <div class="dossier-card" id="dossier-factory">
+            <h4>🏭 Factory NHTSA Decoding</h4>
+            <div id="dossier-factory-body"></div>
+          </div>
+
+          <!-- Col 2: Title & Adverse History -->
+          <div class="dossier-card" id="dossier-history">
+            <h4>🛡️ Title & Auction Salvage Audit</h4>
+            <div id="dossier-history-body"></div>
+          </div>
+
+          <!-- Col 3: Trim Mismatch & Hidden Value -->
+          <div class="dossier-card" id="dossier-trim">
+            <h4>💎 Trim Mismatch & Opportunities</h4>
+            <div id="dossier-trim-body"></div>
+          </div>
+        </div>
+
+        <!-- Market Comps & Price Comparison -->
+        <div class="dossier-card" style="margin-top:16px;" id="dossier-comps">
+          <h4>📊 Texas Market Comps & Price Position</h4>
+          <div id="dossier-comps-body"></div>
+        </div>
+
+        <!-- Physical Inspection Checklist -->
+        <div class="dossier-card" style="margin-top:16px;" id="dossier-checklist">
+          <h4>📋 In-Person Physical & Software Verification Protocol</h4>
+          <div id="dossier-checklist-body"></div>
+        </div>
+
+        <!-- Live Serper Web Research & Leads -->
+        <div class="dossier-card" style="margin-top:16px;" id="dossier-research">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h4 style="margin:0; border:none; padding:0;">🌐 Live Web Research & Auction Records</h4>
+            <button id="btn-serper-scan" class="action-btn" style="font-size:0.8rem; padding:4px 10px;">⚡ Run Live Google Serper Scan</button>
+          </div>
+          <div id="dossier-research-body"></div>
+        </div>
+
+        <!-- Evidence Logging Card -->
+        <div class="dossier-card" style="margin-top:16px;">
+          <h4>📝 Record In-Person Inspection Evidence</h4>
+          <form id="lookup-evidence-form" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin-top:10px;">
+            <div>
+              <label style="font-size:0.8rem; color:var(--muted)">Field</label>
+              <select id="evidence-field" style="width:100%; padding:6px; background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px;">
+                <option value="trim">trim</option>
+                <option value="drivetrain">drivetrain</option>
+                <option value="hw4">hw4</option>
+                <option value="fsd">fsd</option>
+                <option value="history">history</option>
+                <option value="mileage">mileage</option>
+                <option value="price">price</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:0.8rem; color:var(--muted)">Observed Value</label>
+              <input type="text" id="evidence-value" placeholder="e.g. Dual Motor AWD confirmed on screen" style="width:100%; padding:6px; background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px;">
+            </div>
+            <div>
+              <label style="font-size:0.8rem; color:var(--muted)">Evidence Kind</label>
+              <select id="evidence-kind" style="width:100%; padding:6px; background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:6px;">
+                <option value="physical_inspection">My physical inspection</option>
+                <option value="user_report">Reported observation</option>
+                <option value="history_report">History report</option>
+                <option value="seller">Seller claim</option>
+              </select>
+            </div>
+            <div style="display:flex; align-items:flex-end;">
+              <button type="submit" class="action-btn" style="width:100%; padding:7px;">💾 Save Evidence</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </section>
 
     <!-- SOURCES VIEW -->
