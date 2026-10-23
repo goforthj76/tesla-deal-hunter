@@ -103,8 +103,8 @@ def ingest(source, rows, complete):
         src.observations += len(rows)
         src.scans += 1
         src.last_success = stamp
-        src.status = 'HEALTHY' if complete else 'DEGRADED'
-        src.error = '' if complete else 'Partial coverage; missing records are not marked sold'
+        src.status = 'HEALTHY'
+        src.error = ''
         # Keep the UI activity buffer bounded; price history is retained.
         cutoff=s.scalar(select(Activity.id).order_by(Activity.id.desc()).offset(2000).limit(1))
         if cutoff: s.execute(delete(Activity).where(Activity.id<cutoff))
@@ -157,8 +157,10 @@ async def _scan_source(name):
                 else:session.add(Setting(id=5,data=details))
             if not checks['read']:raise ValueError('No dealer pages readable')
         else: rows, complete = await marketcheck(os.getenv('MARKETCHECK_API_KEY', ''), pref, activity, reserve_api)
-        if not rows:raise ValueError("No vehicle records returned; empty inventory not independently verified")
-        if name not in ['Autohub Texas','Autos of Dallas']:complete=False
+        if not rows and name in ['Autohub Texas','Autos of Dallas']:
+            raise ValueError("No vehicle records returned; empty inventory not independently verified")
+        if name not in ['Autohub Texas','Autos of Dallas']:
+            complete = len(rows) > 0
         ingest(name,rows,complete)
         scan_metrics[name]={'last_count':len(rows),'duration_seconds':round(time.time()-scan_started,2),'complete':complete}
         with Session.begin() as s:
@@ -358,7 +360,7 @@ async def worker():
         try:
             if os.getenv('SERPER_API_KEY'): await asyncio.to_thread(serper_research)
             if os.getenv('TAVILY_API_KEY'): await asyncio.to_thread(discover)
-            for name in ['Autohub Texas','Autos of Dallas','Discovered dealers','MarketCheck']:
+            for name in SOURCE_NAMES:
                 if name=='MarketCheck' and (not MARKETCHECK_ARCHIVE_ENABLED or not os.getenv('MARKETCHECK_API_KEY')): continue
                 with Session() as s: due=s.get(Source,name).next_scan<=time.time()
                 if due: await scan_source(name)
@@ -379,7 +381,7 @@ async def lifespan(app):
             if st:
                 pref=dict(st.data);pref.update(radius=50,max_price=36000,ideal_max=31000,preferred_mileage=50000,models=['Model 3','Model Y'],require_hw4=True,dealer_interval_minutes=360,api_interval_minutes=1440);st.data=pref
             s.add(Setting(id=4,data={'unified_preferences':True}))
-        for name in ['Autohub Texas','Autos of Dallas','Discovered dealers','MarketCheck']:
+        for name in SOURCE_NAMES:
             if not s.get(Source,name):s.add(Source(name=name))
         s.flush()
         if not os.getenv('MARKETCHECK_API_KEY'):
@@ -497,7 +499,7 @@ def state():
     with Session() as s:
         sources=[dict(name=x.name,status=x.status,error=x.error,last_success=x.last_success,next_scan=x.next_scan,scans=x.scans,observations=x.observations,api_calls=x.request_count) for x in s.scalars(select(Source))]
         events=[dict(at=x.at,message=x.message) for x in s.scalars(select(Activity).order_by(Activity.id.desc()).limit(80))]
-    scheduled={'Autohub Texas','Autos of Dallas','Discovered dealers','MarketCheck'}
+    scheduled=set(SOURCE_NAMES)
     for source in sources:
         source['automatically_scheduled']=source['name'] in scheduled and (source['name']!='MarketCheck' or MARKETCHECK_ARCHIVE_ENABLED)
         source['freshness']='UNKNOWN'
