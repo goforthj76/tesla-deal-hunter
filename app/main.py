@@ -291,9 +291,59 @@ def discover():
 
     finally: _discovery_lock.release()
 
+def serper_research():
+    if not os.getenv('SERPER_API_KEY'):return {'status':'NOT CONFIGURED'}
+    if not _discovery_lock.acquire(blocking=False):return {'status':'BUSY'}
+    try:
+        data=discovery_state();clock=time.time()
+        cap=min(2000,max(0,int(os.getenv('SERPER_MAX_CALLS','2000'))))
+        used=data.get('serper_reserved',0)+int(os.getenv('SERPER_PREUSED_CALLS','0'))
+        if used>=cap:return {'status':'CAP REACHED'}
+        if data.get('serper_next',0)>clock:return {'status':'COOLDOWN'}
+        with Session() as session:vins=list(session.scalars(select(Vehicle.vin)))
+        jobs=sync_jobs(data.get('vin_jobs',{}),vins);data['vin_jobs']=jobs
+        completed=0;started=time.time()
+        data['serper_next']=clock+60
+        for _ in range(min(10,cap-used)):
+            vin=next_job(jobs,time.time())
+            if not vin:break
+            job=jobs[vin]
+            job.update(status='SEARCHING',provider='Serper',attempts=job.get('attempts',0)+1,last_attempt=now(),retry_after=time.time()+RETRY_SECONDS)
+            data['serper_reserved']=data.get('serper_reserved',0)+1
+            save_discovery(data)
+            try:
+                response=httpx.post('https://google.serper.dev/search',headers={'X-API-KEY':os.environ['SERPER_API_KEY']},json={'q':'"'+vin+'"','gl':'us','hl':'en','num':10},timeout=25)
+                if response.status_code!=200:raise ValueError('Serper HTTP '+str(response.status_code))
+                payload=response.json()
+                if not isinstance(payload.get('organic'),list):raise ValueError('Unexpected Serper response')
+                leads=[];claims=[]
+                for raw in payload['organic']:
+                    result={'url':raw.get('link',''),'title':raw.get('title',''),'content':raw.get('snippet','')}
+                    url=canonical_discovery_url(result['url'])
+                    if not url or not vin_result_matches(result,vin):continue
+                    result['url']=url
+                    leads.append(dict(url=url,title=result['title'][:300],snippet=result['content'][:1600]))
+                    claims.extend(snippet_claims(vin,result,now()))
+                job.update(status='SEARCHED' if leads else 'NO_EXACT_RESULTS',last_success=time.time(),retry_after=0,error='',leads=leads,claims=claims)
+                completed+=1
+                data['serper_status']='HEALTHY'
+            except Exception as exc:
+                error=str(exc) if isinstance(exc,ValueError) else type(exc).__name__
+                job.update(status='ERROR',error=error,retry_after=time.time()+RETRY_SECONDS)
+                data.update(serper_status=error,serper_next=time.time()+RETRY_SECONDS)
+                save_discovery(data)
+                break
+            save_discovery(data)
+        data.update(serper_last_batch=completed,serper_last_duration=round(time.time()-started,2))
+        save_discovery(data)
+        if completed:activity(f'Serper: {completed} VIN searches completed; snippets remain unverified')
+        return {'completed':completed}
+    finally:_discovery_lock.release()
+
 async def worker():
     while True:
         try:
+            if os.getenv('SERPER_API_KEY'): await asyncio.to_thread(serper_research)
             if os.getenv('TAVILY_API_KEY'): await asyncio.to_thread(discover)
             for name in ['Autohub Texas','Autos of Dallas','Discovered dealers','MarketCheck']:
                 if name=='MarketCheck' and (not MARKETCHECK_ARCHIVE_ENABLED or not os.getenv('MARKETCHECK_API_KEY')): continue
@@ -640,4 +690,4 @@ def vin_queue_status():
     data=discovery_state()
     with Session() as session:vins=list(session.scalars(select(Vehicle.vin)))
     jobs=sync_jobs(data.get('vin_jobs',{}),vins)
-    return dict(**queue_summary(jobs,time.time()),configured=data['configured'],remaining_search_calls=data['remaining'],next_cycle=data['next_scan'],vin_searches_per_cycle=3,cycle_hours=INTERVAL/3600,monthly_cap=CAP,jobs=jobs,notice='Every valid tracked VIN is queued. Search snippets are unverified leads. No results does not mean clean history. Search completion is limited by credits and source coverage.')
+    return dict(serper=dict(configured=bool(os.getenv('SERPER_API_KEY')),reserved=data.get('serper_reserved',0)+int(os.getenv('SERPER_PREUSED_CALLS','0')),cap=min(2000,max(0,int(os.getenv('SERPER_MAX_CALLS','2000')))),status=data.get('serper_status','WAITING'),next_cycle=data.get('serper_next',0),batch_size=10,interval_seconds=60,last_batch=data.get('serper_last_batch',0),last_duration=data.get('serper_last_duration',0)),**queue_summary(jobs,time.time()),configured=data['configured'] or bool(os.getenv('SERPER_API_KEY')),remaining_search_calls=data['remaining'],next_cycle=data['next_scan'],vin_searches_per_cycle=3,cycle_hours=INTERVAL/3600,monthly_cap=CAP,jobs=jobs,notice='Every valid tracked VIN is queued. Search snippets are unverified leads. No results does not mean clean history. Search completion is limited by credits and source coverage.')

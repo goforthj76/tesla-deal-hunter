@@ -11,3 +11,12 @@ Search results require an exact VIN. Single-VIN snippets can supply explicitly u
 Validation: 57 tests, plus JS syntax check. Regression cases cover all-VIN enrollment, older/over-budget car research, fair queue selection, retry accounting, no exact matches, mixed-VIN rejection and automatic dashboard mismatch propagation.
 
 After restart: GET /api/vin-queue (total should match valid tracked VINs), verify first worker cycle saves vin_jobs, and confirm no second scanner is running. Existing discovery cooldown remains respected; do not reset budgets to force a demo.
+
+## Serper integration update
+Private live .env now contains SERPER_API_KEY, SERPER_MAX_CALLS=2000 and SERPER_PREUSED_CALLS=2. Never commit these values or the .env. Two live test requests returned HTTP 200 in 1.47s and 0.94s. No inventory-wide live run has been started.
+
+Serper uses the shared queue and discovery lock, up to 10 serialized searches per 60-second cycle. Lifetime reservation persists in discovery JSON and does not reset monthly. Preused test calls count toward the cap. Provider errors halt the batch with a four-hour backoff. The 2000-call cap leaves headroom against the advertised 2500 trial, but is not an account-balance check; usage outside this app is not tracked. Do not enable paid refills.
+
+The earlier 51-day estimate applies only to Tavily-only mode. Serper mode targets up to 600 searches/hour, actual throughput lower depending on network and other collectors. UI reports completed jobs and measured last-batch duration rather than claiming universal verification.
+
+Validation now: 59 tests pass plus JS syntax check. Merge the updated PR #2 and restart the existing runner once. Verify /api/vin-queue reports serper.configured=true and reserved at least 2; verify completion count increases after a batch. Preserve existing DB and .env.
