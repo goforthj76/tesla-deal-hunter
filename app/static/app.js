@@ -51,12 +51,12 @@ function render() {
     <div class="stat-card"><strong>${state.stats?.listings_scanned || 0}</strong><span>Listings Tracked</span></div>
     <div class="stat-card"><strong>${state.stats?.unique_vins || 0}</strong><span>Unique VINs</span></div>
     <div class="stat-card"><strong>${state.vehicles?.filter(v => (v.deal_score || 0) >= 70).length || 0}</strong><span>Deals (Score 70+)</span></div>
-    <div class="stat-card"><strong>${state.sources?.filter(s => s.status === 'HEALTHY' || s.status === 'SCANNING').length || 0} / ${state.sources?.length || 0}</strong><span>Sources Active</span></div>
+    <div class="stat-card"><strong>${state.sources?.filter(s => s.automatically_scheduled && (s.status === 'HEALTHY' || s.status === 'SCANNING')).length || 0} / ${state.sources?.length || 0}</strong><span>Scheduled & Healthy</span></div>
   `;
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', '⚡ HW4 / 2024+', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', 'MANUAL REVIEW', '🗑️ Trash VINs', 'STARRED'];
+  const categories = ['ALL', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', 'MANUAL REVIEW', '🗑️ Trash VINs', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;
@@ -81,7 +81,7 @@ function render() {
         <div class="source-card">
           <h4>${s.name}</h4>
           <p style="font-size:0.8rem; color:var(--muted)">Status: <b style="color:${s.status === 'HEALTHY' ? '#3fb950' : '#8b949e'}">${s.status}</b></p>
-          <p style="font-size:0.8rem; color:var(--muted)">Found: ${s.observations} listings</p>
+          <p style="font-size:0.8rem; color:var(--muted)">${s.automatically_scheduled ? "Scheduled" : "Manual only"} · ${s.freshness || "UNKNOWN"} · ${s.observations} observations</p>
           <button class="sm-btn" style="margin-top:6px;" onclick="triggerScan('${s.name}')">Scan Now</button>
         </div>
       `

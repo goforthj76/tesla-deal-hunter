@@ -55,6 +55,16 @@ def settings():
     with Session() as s: return s.get(Setting,1).data
 
 def ingest(source, rows, complete):
+    validated=[]
+    for row in rows:
+        try:
+            row=dict(row);row['vin']=normalize_vin(row.get('vin'))
+            price=row.get('price');mileage=row.get('mileage')
+            if price is not None and (not isinstance(price,(int,float)) or not math.isfinite(price) or price<5000):raise ValueError('Invalid price')
+            if mileage is not None and (not isinstance(mileage,(int,float)) or not math.isfinite(mileage) or mileage<0):raise ValueError('Invalid mileage')
+            validated.append(row)
+        except (ValueError,TypeError):complete=False
+    rows=validated
     stamp=now(); seen=set()
     with Session.begin() as s:
         for d in rows:
@@ -145,6 +155,7 @@ async def _scan_source(name):
             if not checks['read']:raise ValueError('No dealer pages readable')
         else: rows, complete = await marketcheck(os.getenv('MARKETCHECK_API_KEY', ''), pref, activity, reserve_api)
         if not rows:raise ValueError("No vehicle records returned; empty inventory not independently verified")
+        if name not in ['Autohub Texas','Autos of Dallas']:complete=False
         ingest(name,rows,complete)
         scan_metrics[name]={'last_count':len(rows),'duration_seconds':round(time.time()-scan_started,2),'complete':complete}
         with Session.begin() as s:

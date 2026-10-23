@@ -60,3 +60,13 @@ def test_false_clean_title_flag_is_review_not_verified_salvage():
  assert d['history'].startswith('UNKNOWN')
  assert any('flag is false' in w for w in d['warnings'])
  assert not any('verified adverse' in w.lower() for w in d['warnings'])
+
+def test_invalid_feed_row_cannot_remove_previous_inventory(database):
+ from app import main
+ from app.database import Listing
+ from sqlalchemy import select
+ main.ingest('test',[record()],False)
+ main.ingest('test',[{**record(),'vin':'bad'}],True)
+ with database() as s:
+  rows=list(s.scalars(select(Listing)))
+  assert len(rows)==1 and rows[0].status=='ACTIVE'
