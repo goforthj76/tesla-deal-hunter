@@ -29,7 +29,8 @@ def test_evidence_api_roundtrip(database,monkeypatch):
     from app import main
     from fastapi.testclient import TestClient
     monkeypatch.setattr(main,'settings',lambda:main.Preferences().model_dump())
-    c=TestClient(main.app);vin='5YJ3E1EA4RF862917'
+    monkeypatch.setenv('TDH_PASSWORD','fixture-password')
+    c=TestClient(main.app,headers={'Authorization':'Basic '+__import__('base64').b64encode(b'hunter:fixture-password').decode()});vin='5YJ3E1EA4RF862917'
     r=c.post('/api/investigate/'+vin+'/evidence',json={'field':'trim','value':'Long Range','kind':'physical_inspection','source':'test inspection'})
     assert r.status_code==200
     identifier=r.json()['id']
@@ -45,3 +46,50 @@ def test_populated_inventory_investigation(database,monkeypatch):
     main.ingest('test',[record()],False)
     rows=main.vehicle_rows()
     assert len(rows)==1 and 'investigation' in rows[0]
+
+def test_negated_and_generic_history_not_positive_proof():
+ from app.investigator import adverse_claim
+ assert not adverse_claim('No salvage or structural damage reported')
+ assert not adverse_claim('Some vehicles may have a total loss')
+ assert adverse_claim('Clean title. With a total loss on CARFAX')
+ assert adverse_claim('No salvage title, but insurance total loss')
+
+def test_false_clean_title_flag_is_review_not_verified_salvage():
+ d=investigate([obs('x',carfax_clean_title=False)],[],P)
+ assert d['purchase_readiness']=='HOLD'
+ assert d['history'].startswith('UNKNOWN')
+ assert any('flag is false' in w for w in d['warnings'])
+ assert not any('verified adverse' in w.lower() for w in d['warnings'])
+
+def test_invalid_feed_row_cannot_remove_previous_inventory(database):
+ from app import main
+ from app.database import Listing
+ from sqlalchemy import select
+ main.ingest('test',[record()],False)
+ main.ingest('test',[{**record(),'vin':'bad'}],True)
+ with database() as s:
+  rows=list(s.scalars(select(Listing)))
+  assert len(rows)==1 and rows[0].status=='ACTIVE'
+
+def test_actual_case_rwd_vs_reported_long_range():
+ d=investigate([obs('5YJ3E1EA4RF862917',trim='RWD')],[claim('trim','Long Range')],P)
+ assert any('MISIDENTIFIED' in x for x in d['opportunities'])
+ assert not any('MISIDENTIFIED' in x for x in investigate([obs('x',trim='Long Range RWD')],[],P)['opportunities'])
+
+def test_negation_does_not_hide_separate_total_loss():
+ from app.investigator import adverse_claim
+ assert adverse_claim('No frame damage, insurance total loss')
+ assert adverse_claim('Total loss and no structural damage')
+ assert not adverse_claim('No structural damage reported')
+
+def test_region_label_not_store_conflict():
+ d=investigate([obs('x',address='DFW Area'),obs('x',address='Fort Worth, TX')],[],P)
+ assert not any(c['field']=='location' for c in d['conflicts'])
+ d=investigate([obs('x',address='Fort Worth, TX'),obs('x',address='Orlando, FL')],[],P)
+ assert any(c['field']=='location' for c in d['conflicts'])
+
+def test_marketplace_claim_is_not_seller_evidence():
+ o=obs('x',trim='RWD');o['source']='TrueCar'
+ d=investigate([o],[],P)
+ assert d['claims'][0]['kind']=='aggregator'
+ assert d['freshness']=='STALE OR UNVERIFIED'

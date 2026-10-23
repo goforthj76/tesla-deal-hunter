@@ -52,7 +52,9 @@ def activity(message):
     log.info(json.dumps({'at':now(),'message':message}))
 
 def settings():
-    with Session() as s: return s.get(Setting,1).data
+    with Session() as s:
+        row=s.get(Setting,1)
+        return row.data if row else Preferences().model_dump()
 
 def ingest(source, rows, complete):
     validated=[]
@@ -244,7 +246,7 @@ def discover():
         data.update(next_scan=time.time()+INTERVAL,status='SEARCHING')
         new_count=0;result_count=0;filtered=0;errors=[];completed=0
         for _ in range(min(BATCH,data['remaining'])):
-            vin=choose_vin_task(candidates,attempts,time.time()) if data['cursor']%4==3 else None
+            vin=choose_vin_task(candidates,attempts,time.time(),settings()['max_price']) if data['cursor']%4==3 else None
             item={'query':'"'+vin+'" Tesla history auction salvage dealer location','label':'VIN '+vin,'domains':[]} if vin else plan[(data['cursor']-data['cursor']//4)%len(plan)]
             if vin:
                 attempts[vin]=time.time();data['vin_attempts']=attempts
@@ -327,9 +329,11 @@ app=FastAPI(title='Tesla Deal Hunter',lifespan=lifespan)
 
 @app.middleware('http')
 async def security(request:Request,call_next):
-    if os.getenv('TDH_REQUIRE_AUTH', '').lower() == 'true':
+    if os.getenv('TDH_ALLOW_ANONYMOUS', '').lower() not in ('1', 'true', 'yes'):
         import base64
         password=os.getenv('TDH_PASSWORD','')
+        if not password:
+            return JSONResponse({'detail':'Access disabled until TDH_PASSWORD is configured locally'},503)
         if password:
             try:
                 value=base64.b64decode(request.headers.get('authorization','').split(' ',1)[1]).decode()

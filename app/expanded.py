@@ -129,15 +129,15 @@ async def inspect_dealers(urls,emit):
 
 def vin_result_matches(item,vin):
     # Exact VIN must appear in returned text or URL. Search rank is not evidence.
-    return vin.upper() in ' '.join(str(item.get(k,'')) for k in ['title','content','url']).upper()
+    return bool(re.search(r'(?<![A-Z0-9])'+re.escape(vin.upper())+r'(?![A-Z0-9])',' '.join(str(item.get(k,'')) for k in ['title','content','url']).upper()))
 
-def choose_vin_task(candidates,attempts,clock):
+def choose_vin_task(candidates,attempts,clock,max_price=36000):
     eligible=[]
     for d in candidates:
         try:vin=normalize_vin(d.get('vin'))
         except ValueError:continue
         price=d.get('price');year=d.get('year') or 0
-        if not isinstance(price,(int,float)) or not 5000<=price<=36000 or year<2023:continue
+        if not isinstance(year,(int,float)) or not isinstance(price,(int,float)) or not 5000<=price<=max_price or not 2023<=year<=2100:continue
         if clock-attempts.get(vin,0)<7*86400:continue
         eligible.append((-(year),d.get('mileage') if isinstance(d.get('mileage'),(int,float)) else 999999,vin))
     return min(eligible)[2] if eligible else None
