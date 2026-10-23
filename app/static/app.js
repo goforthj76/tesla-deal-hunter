@@ -56,7 +56,7 @@ function render() {
 
   // Filters
   const filtersEl = $('filters');
-  const categories = ['ALL', '⚡ HW4 / 2024+', 'HOT DEAL', 'GREAT DEAL', 'GOOD DEAL', 'FAIR', '🗑️ Trash VINs', 'STARRED'];
+  const categories = ['ALL', '⚡ HW4 / 2024+', 'WATCH', 'MANUAL REVIEW', 'REJECTED', '🗑️ Trash VINs', 'STARRED'];
   filtersEl.innerHTML = categories
     .map((c) => {
       let count = 0;

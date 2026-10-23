@@ -19,6 +19,7 @@ from .database import ROOT, Base, engine, Session, Vehicle, Listing, Price, Sour
 from .analysis import assess, ranking_key, normalize_vin
 from .database import Evidence, Observation
 from .investigator import investigate, FIELDS, KINDS
+from .expanded import CAP, BATCH, INTERVAL, plans, relevant, inspect_dealers, SEEDS
 from .collectors import autohub, marketcheck, dallas, tesla_used, cars_com, cargurus, carvana_search, truecar_search, scan_all_sources
 from .scoring import score_deal, compute_market_averages, check_hw4
 
@@ -90,7 +91,7 @@ def ingest(source, rows, complete):
         src.scans += 1
         src.last_success = stamp
         src.status = 'HEALTHY' if complete else 'DEGRADED'
-        src.error = '' if complete else 'Pagination capped; incomplete coverage'
+        src.error = '' if complete else 'Partial coverage; missing records are not marked sold'
         # Keep the UI activity buffer bounded; price history is retained.
         cutoff=s.scalar(select(Activity.id).order_by(Activity.id.desc()).offset(2000).limit(1))
         if cutoff: s.execute(delete(Activity).where(Activity.id<cutoff))
@@ -102,7 +103,15 @@ def reserve_api():
         if src.request_count>=s.get(Setting,1).data['monthly_api_budget']: raise ValueError('Local monthly API budget exhausted')
         src.request_count+=1
 
+SOURCE_NAMES=['Autohub Texas','Autos of Dallas','Tesla.com','Cars.com','CarGurus','Carvana','TrueCar','Discovered dealers','MarketCheck']
+_source_locks={}
 async def scan_source(name):
+    if name not in SOURCE_NAMES: raise HTTPException(404,'Unknown source')
+    lock=_source_locks.setdefault(name,asyncio.Lock())
+    if lock.locked(): return
+    async with lock: await _scan_source(name)
+
+async def _scan_source(name):
     global scanning
     if name == "MarketCheck" and not MARKETCHECK_ARCHIVE_ENABLED:
         activity("MarketCheck scheduled archive disabled: retention authorization required")
@@ -120,7 +129,22 @@ async def scan_source(name):
         elif name == 'Tesla.com': rows, complete = await tesla_used(pref, activity)
         elif name == 'Cars.com': rows, complete = await cars_com(pref, activity)
         elif name == 'CarGurus': rows, complete = await cargurus(pref, activity)
+        elif name == 'Discovered dealers':
+            data=discovery_state()
+            with Session() as session:
+                checkpoint=session.get(Setting,5);cursor=checkpoint.data.get('cursor',0) if checkpoint else 0
+            from .expanded import allowed
+            urls=list(dict.fromkeys(x['url'] for x in data['leads']+SEEDS if allowed(x['url'])))
+            ordered=urls[cursor%len(urls):]+urls[:cursor%len(urls)] if urls else []
+            rows,checks=await inspect_dealers(ordered,activity);complete=False
+            with Session.begin() as session:
+                checkpoint=session.get(Setting,5)
+                details={'cursor':cursor+min(24,len(urls)),'last_checks':checks,'queued_urls':len(urls)}
+                if checkpoint:checkpoint.data=details
+                else:session.add(Setting(id=5,data=details))
+            if not checks['read']:raise ValueError('No dealer pages readable')
         else: rows, complete = await marketcheck(os.getenv('MARKETCHECK_API_KEY', ''), pref, activity, reserve_api)
+        if not rows:raise ValueError("No vehicle records returned; empty inventory not independently verified")
         ingest(name,rows,complete)
         scan_metrics[name]={'last_count':len(rows),'duration_seconds':round(time.time()-scan_started,2),'complete':complete}
         with Session.begin() as s:
@@ -181,8 +205,12 @@ def discovery_state():
     data.setdefault('next_scan',0)
     data.setdefault('cursor',0)
     data['configured']=bool(os.getenv('TAVILY_API_KEY'))
-    data['monthly_cap']=300
-    data['remaining']=max(0,300-data.get('reserved_calls',0))
+    data['monthly_cap']=CAP
+    data['queries_per_cycle']=BATCH
+    data['max_results_per_query']=20
+    data['query_plan_size']=len(plans())
+    data['result_slots_per_hour']=BATCH*20*3600/INTERVAL
+    data['remaining']=max(0,CAP-data.get('reserved_calls',0))
     return data
 
 def save_discovery(data):
@@ -198,34 +226,44 @@ def discover():
         if not data['configured']: return {'status':'API key not configured'}
         if data['next_scan']>time.time(): return {'status':'cooldown','next_scan':data['next_scan']}
         if not data['remaining']: return {'status':'local monthly cap reached'}
-        town=DISCOVERY_TOWNS[data['cursor']%len(DISCOVERY_TOWNS)]
-        query=f'used Tesla Model 3 Model Y for sale dealer {town} Texas'
-        data.update(reserved_calls=data.get('reserved_calls',0)+1,cursor=data['cursor']+1,next_scan=time.time()+4*3600,status='SEARCHING',last_query=query)
-        save_discovery(data) # Reserve before network I/O, including failures/restarts.
-        try:
-            response=httpx.post('https://api.tavily.com/search',headers={'Authorization':'Bearer '+os.environ['TAVILY_API_KEY']},json={'query':query,'search_depth':'basic','auto_parameters':False,'max_results':10,'include_answer':False,'include_raw_content':False,'include_images':False},timeout=30)
-            if response.status_code!=200: raise ValueError('Tavily HTTP '+str(response.status_code))
-            payload=response.json()
-            if not isinstance(payload.get('results'),list): raise ValueError('Unexpected Tavily response')
-            leads={x['url']:x for x in data['leads']};new_count=0
-            for item in payload['results']:
-                url=canonical_discovery_url(item.get('url',''))
-                if not url: continue
-                prior=leads.get(url);new_count+=int(prior is None)
-                leads[url]={'url':url,'title':str(item.get('title',''))[:300],'snippet':str(item.get('content',''))[:1200],'first_seen':prior['first_seen'] if prior else now(),'last_seen':now(),'town_query':town,'status':'UNVERIFIED LEAD — distance, availability and VIN need review'}
-            data.update(leads=sorted(leads.values(),key=lambda x:x['last_seen'],reverse=True)[:2000],status='HEALTHY',last_success=now(),last_new_urls=new_count,last_results=len(payload['results']),error='')
-            activity(f'Tavily discovery: {len(payload["results"])} results, {new_count} new URLs; not verified vehicles')
-        except Exception as exc:
-            data.update(status='UNAVAILABLE',error=str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
+        plan=plans();leads={x['url']:x for x in data['leads'] if relevant(x)}
+        data.update(next_scan=time.time()+INTERVAL,status='SEARCHING')
+        new_count=0;result_count=0;filtered=0;errors=[];completed=0
+        for _ in range(min(BATCH,data['remaining'])):
+            item=plan[data['cursor']%len(plan)]
+            data.update(reserved_calls=data.get('reserved_calls',0)+1,cursor=data['cursor']+1,last_query=item['query'])
+            save_discovery(data) # Each request reserved before I/O, including errors.
+            try:
+                request={'query':item['query'],'search_depth':'basic','auto_parameters':False,'max_results':20,'include_answer':False,'include_raw_content':False,'include_images':False}
+                if item['domains']:request['include_domains']=item['domains']
+                response=httpx.post('https://api.tavily.com/search',headers={'Authorization':'Bearer '+os.environ['TAVILY_API_KEY']},json=request,timeout=30)
+                if response.status_code!=200:raise ValueError('Tavily HTTP '+str(response.status_code))
+                payload=response.json()
+                if not isinstance(payload.get('results'),list):raise ValueError('Unexpected Tavily response')
+                completed+=1;result_count+=len(payload['results'])
+                for result in payload['results']:
+                    url=canonical_discovery_url(result.get('url',''))
+                    if not url or not relevant(result):filtered+=1;continue
+                    prior=leads.get(url);new_count+=int(prior is None)
+                    leads[url]={'url':url,'title':str(result.get('title',''))[:300],'snippet':str(result.get('content',''))[:1200],'first_seen':prior['first_seen'] if prior else now(),'last_seen':now(),'town_query':item['label'],'status':'UNVERIFIED LEAD — distance, availability and VIN need review'}
+                data.update(leads=sorted(leads.values(),key=lambda x:x['last_seen'],reverse=True)[:2000])
+                save_discovery(data)
+            except Exception as exc:
+                errors.append(str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
+                if getattr(locals().get('response'),'status_code',None) in [401,429,432,433]:break
+        data.update(status='HEALTHY' if not errors else 'DEGRADED' if completed else 'UNAVAILABLE',last_new_urls=new_count,last_results=result_count,last_filtered=filtered,last_queries=completed,error='; '.join(errors)[:200])
+        if completed:data['last_success']=now()
         save_discovery(data)
-        return {'status':data['status'],'new_urls':data.get('last_new_urls',0)}
+        activity(f'Tavily expanded discovery: {completed} queries, {result_count} results, {new_count} new URLs, {filtered} filtered; not verified vehicles')
+        return {'status':data['status'],'new_urls':new_count}
+
     finally: _discovery_lock.release()
 
 async def worker():
     while True:
         try:
             if os.getenv('TAVILY_API_KEY'): await asyncio.to_thread(discover)
-            for name in ['Autohub Texas','Autos of Dallas','MarketCheck']:
+            for name in ['Autohub Texas','Autos of Dallas','Discovered dealers','MarketCheck']:
                 if name=='MarketCheck' and (not MARKETCHECK_ARCHIVE_ENABLED or not os.getenv('MARKETCHECK_API_KEY')): continue
                 with Session() as s: due=s.get(Source,name).next_scan<=time.time()
                 if due: await scan_source(name)
@@ -246,7 +284,7 @@ async def lifespan(app):
             if st:
                 pref=dict(st.data);pref.update(radius=50,max_price=36000,ideal_max=31000,preferred_mileage=50000,models=['Model 3','Model Y'],require_hw4=True,dealer_interval_minutes=360,api_interval_minutes=1440);st.data=pref
             s.add(Setting(id=4,data={'unified_preferences':True}))
-        for name in ['Autohub Texas','Autos of Dallas','MarketCheck']:
+        for name in ['Autohub Texas','Autos of Dallas','Discovered dealers','MarketCheck']:
             if not s.get(Source,name):s.add(Source(name=name))
         s.flush()
         if not os.getenv('MARKETCHECK_API_KEY'):
@@ -328,12 +366,12 @@ def vehicle_rows():
 
             item = dict(d)
             item.update(analysis)
-            item['deal_score'] = deal['score']
-            item['category'] = deal['category'] if deal['category'] != 'OVERPRICED' else 'FAIR'
-            item['reasons'] = deal.get('reasons') or analysis.get('reasons', [])
+            item['deal_score'] = analysis['preference_score']
+            item['category'] = analysis['category']
+            item['reasons'] = analysis.get('reasons', [])
             item['risks'] = risks
-            item['hw4'] = deal.get('hw4') or analysis.get('hw4', 'UNKNOWN')
-            item['is_hw4'] = deal.get('is_hw4', False)
+            item['hw4'] = analysis.get('hw4', 'UNKNOWN')
+            item['is_hw4'] = False # No physical verification from model-year inference
             item['historical_only'] = historical_only
             item['watched'] = v.watched
             item['first_seen'] = v.first_seen
@@ -346,10 +384,10 @@ def vehicle_rows():
                 dict(name=l.source, url=l.url, observed=l.last_seen, status=l.status, price=l.data.get('price'))
                 for l in records
             ]
-            findings=investigate([dict(source=l.source,url=l.url,observed=l.last_seen,data=l.data) for l in records], evidence_by_vin.get(vin,[]), pref)
+            findings=investigate([dict(source=l.source,url=l.url,observed=l.last_seen,data=l.data) for l in records], evidence_by_vin.get(v.vin,[]), pref)
             item['investigation']=findings
             item['risks']=list(dict.fromkeys(item['risks']+findings['warnings']))
-            if findings['purchase_readiness']=='HOLD':
+            if findings['purchase_readiness']=='HOLD' and item['category']!='REJECTED':
                 item['category']='MANUAL REVIEW'
             result.append(item)
     return sorted(result, key=ranking_key)
@@ -428,18 +466,19 @@ def finish_hunt():
 
 
 async def perform_scan_all():
-    pref = settings()
-    activity("Starting concurrent scan across all sources...")
-    mk_key = os.getenv('MARKETCHECK_API_KEY', '') if MARKETCHECK_ARCHIVE_ENABLED else ''
-    results = await scan_all_sources(pref, activity, marketcheck_key=mk_key)
-    for name, (rows, complete) in results.items():
-        if rows:
-            ingest(name, rows, complete)
-            scan_metrics[name] = {'last_count': len(rows), 'complete': complete}
-            activity(f"{name}: ingested {len(rows)} vehicles")
+    # Route through the same budgeting, schedules and failure reporting as worker.
+    for name in SOURCE_NAMES:
+        with Session() as session:
+            source=session.get(Source,name)
+            due=source is not None and source.next_scan<=time.time()
+        if due: await scan_source(name)
 
 @app.post('/api/scan/{source_name}')
 async def trigger_scan(source_name: str):
+    if source_name not in SOURCE_NAMES:raise HTTPException(404,'Unknown source')
+    with Session() as session:
+        src=session.get(Source,source_name)
+        if src and src.next_scan>time.time():raise HTTPException(429,'Source cooldown active')
     asyncio.create_task(scan_source(source_name))
     return {'status': f'Scan triggered for {source_name}'}
 
@@ -464,7 +503,7 @@ async def set_marketcheck_key(body: MarketCheckKeyUpdate):
     global MARKETCHECK_ARCHIVE_ENABLED
     key = body.api_key.strip()
     os.environ['MARKETCHECK_API_KEY'] = key
-    MARKETCHECK_ARCHIVE_ENABLED = True
+    MARKETCHECK_ARCHIVE_ENABLED = os.getenv("MARKETCHECK_RETENTION_AUTHORIZED", "").lower() == "true"
     env_path = ROOT / '.env'
     lines = []
     if env_path.exists():
@@ -491,7 +530,7 @@ def eval_markdown():
         and (r.get('year', 0) >= 2024 or r.get('is_hw4'))
         and r.get('category') != 'TRASH VIN'
     ]
-    md = [f"# Tesla Deal Hunter Feed — {now()}", f"Found {len(filtered)} verified deals meeting criteria:\n"]
+    md = [f"# Tesla Deal Hunter Feed — {now()}", f"Found {len(filtered)} candidate listings requiring verification:\n"]
     for v in filtered[:50]:
         md.append(f"### {v.get('year')} Tesla {v.get('model')} {v.get('trim', '')}")
         md.append(f"- **Price**: ${v.get('price'):,}")
@@ -544,3 +583,4 @@ def retract_evidence(vin:str,identifier:int):
         if not e or e.vin!=vin:raise HTTPException(404)
         e.retracted=True
     return {'status':'Retracted; audit record preserved'}
+
